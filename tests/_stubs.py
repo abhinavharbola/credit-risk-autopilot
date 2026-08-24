@@ -35,12 +35,14 @@ def _stub(name: str, **attrs) -> None:
 
 _stub("evidently", Report=object)
 _stub("evidently.presets", DataDriftPreset=object)
+_stub("mlflow.sklearn", load_model=lambda uri: f"model_for_{uri}")
+_stub("mlflow.pyfunc", load_model=lambda uri: f"model_for_{uri}")
 _stub(
     "mlflow",
     MlflowClient=lambda *a, **k: MagicMock(),
     start_run=MagicMock(),
-    sklearn=MagicMock(),
-    pyfunc=MagicMock(),
+    sklearn=sys.modules.get("mlflow.sklearn"),
+    pyfunc=sys.modules.get("mlflow.pyfunc"),
     log_param=MagicMock(),
 )
 _stub("sqlalchemy", text=lambda s: s)

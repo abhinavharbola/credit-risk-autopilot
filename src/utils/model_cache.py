@@ -1,13 +1,23 @@
-"""Shared model-loading cache: reloads a registered model's pyfunc artifact
+"""Shared model-loading cache: reloads a registered model's sklearn artifact
 only when the given alias's version has actually changed. Used by both the
 serving layer (src/serving/app.py) and the orchestration loop
 (src/orchestration/pipeline.py), so there's exactly one cache
 implementation, not two independently-written copies that could drift apart.
+
+Loads via mlflow.sklearn.load_model() (the native flavor), not
+mlflow.pyfunc.load_model(). pyfunc wraps sklearn models behind a generic
+.predict() that returns hard class labels and doesn't expose
+.predict_proba() at all - this project needs actual probabilities
+(src/model/train.py's score() calls .predict_proba()), and needs the
+production model to behave identically to the challenger model returned
+directly from train_challenger(), not a different wrapper with a different
+interface.
 """
 
 from typing import Any
 
 import mlflow
+import mlflow.sklearn
 
 
 class AliasedModelCache:
@@ -33,7 +43,7 @@ class AliasedModelCache:
             ) from e
 
         if version_info.version != self._version:
-            self._model = mlflow.pyfunc.load_model(
+            self._model = mlflow.sklearn.load_model(
                 f"models:/{self.model_name}@{self.alias}"
             )
             self._version = version_info.version

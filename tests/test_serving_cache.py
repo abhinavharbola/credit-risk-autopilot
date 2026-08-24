@@ -20,17 +20,17 @@ def test_cache_reloads_only_when_alias_version_changes():
     import src.utils.model_cache as model_cache_module
 
     orig_client_cls = model_cache_module.mlflow.MlflowClient
-    orig_loader = model_cache_module.mlflow.pyfunc.load_model
+    orig_loader = model_cache_module.mlflow.sklearn.load_model
     model_cache_module.mlflow.MlflowClient = lambda: fake_client
     load_calls = []
-    model_cache_module.mlflow.pyfunc.load_model = lambda uri: load_calls.append(uri) or f"model_for_{uri}"
+    model_cache_module.mlflow.sklearn.load_model = lambda uri: load_calls.append(uri) or f"model_for_{uri}"
 
     try:
         model_a, version_a = cache.get()
         model_b, version_b = cache.get()
     finally:
         model_cache_module.mlflow.MlflowClient = orig_client_cls
-        model_cache_module.mlflow.pyfunc.load_model = orig_loader
+        model_cache_module.mlflow.sklearn.load_model = orig_loader
 
     assert version_a == version_b == "1"
     assert model_a == model_b
@@ -49,17 +49,17 @@ def test_cache_reloads_after_alias_version_bumps():
     import src.utils.model_cache as model_cache_module
 
     orig_client_cls = model_cache_module.mlflow.MlflowClient
-    orig_loader = model_cache_module.mlflow.pyfunc.load_model
+    orig_loader = model_cache_module.mlflow.sklearn.load_model
     model_cache_module.mlflow.MlflowClient = lambda: fake_client
     load_calls = []
-    model_cache_module.mlflow.pyfunc.load_model = lambda uri: load_calls.append(uri) or f"model_for_{uri}"
+    model_cache_module.mlflow.sklearn.load_model = lambda uri: load_calls.append(uri) or f"model_for_{uri}"
 
     try:
         _, version_a = cache.get()
         _, version_b = cache.get()
     finally:
         model_cache_module.mlflow.MlflowClient = orig_client_cls
-        model_cache_module.mlflow.pyfunc.load_model = orig_loader
+        model_cache_module.mlflow.sklearn.load_model = orig_loader
 
     assert version_a == "1"
     assert version_b == "2"

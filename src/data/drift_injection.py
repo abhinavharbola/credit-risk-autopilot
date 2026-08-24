@@ -59,6 +59,12 @@ def apply_temporary_concept_drift(
     columns = p["columns"]
     blend_ratio = p["blend_ratio"]
 
+    # blending produces fractional values, but several of these columns
+    # (the delinquency counts) start out as int64 in the raw dataset -
+    # cast to float first so the assignment below doesn't trigger pandas'
+    # "incompatible dtype" warning (a hard error in future pandas versions)
+    out[columns] = out[columns].astype(float)
+
     non_delinquent_centroid = out.loc[out[TARGET] == 0, columns].mean()
     delinquent_mask = out[TARGET] == 1
 

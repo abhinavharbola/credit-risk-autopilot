@@ -22,7 +22,7 @@ from src.db.repository import (
 )
 from src.drift.detect import check_retrain_trigger
 from src.gate.evaluate import compute_metric, evaluate_gate
-from src.model.features import FEATURES, TARGET
+from src.model.features import TARGET
 from src.model.train import score as score_model
 from src.model.train import train_challenger
 from src.orchestration.promote import check_rollback, promote_challenger
@@ -44,7 +44,7 @@ def score_batch_with_production(
     the model as a parameter rather than loading it itself, so run_tick's
     cached load is reused instead of a second independent load per tick.
     """
-    probs = model.predict(batch_df[FEATURES])
+    probs = score_model(model, batch_df)
     rows = [
         {
             "batch_id": batch_id,

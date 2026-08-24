@@ -11,9 +11,10 @@ Single command that ties everything together:
   5. run N ticks of the governance loop end to end
   6. print a summary: retrain triggers, promotions, rollbacks
 
-Requires .env populated: DATABASE_URL, MLFLOW_TRACKING_URI/USERNAME/PASSWORD,
-and Kaggle credentials for the dataset download (KAGGLE_USERNAME/KAGGLE_KEY
-env vars, or a configured ~/.kaggle/kaggle.json).
+Requires .env populated: DATABASE_URL, MLFLOW_TRACKING_URI/USERNAME/PASSWORD.
+Also requires data/raw/cs-training.csv to already be present - this project
+does not download Give Me Some Credit automatically (see src/data/ingest.py
+for why: it's a Kaggle competition dataset, not a plain dataset).
 """
 
 import pickle
@@ -28,7 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import mlflow
 import pandas as pd
 
-from src.data.ingest import confirm_positive_rate, download_dataset, load_raw
+from src.data.ingest import confirm_positive_rate, load_raw
 from src.data.split import (
     apply_imputation,
     build_pretrain_batches,
@@ -53,9 +54,8 @@ MODEL_NAME = "credit-risk-classifier"
 
 
 def prepare_data() -> tuple[list, pd.DataFrame, pd.DataFrame]:
-    print("downloading + loading raw data...")
-    path = download_dataset()
-    raw = load_raw(path)
+    print("loading raw data from data/raw/...")
+    raw = load_raw()
     rate = confirm_positive_rate(raw)
     print(f"loaded {len(raw)} rows, positive rate {rate:.4f}")
 

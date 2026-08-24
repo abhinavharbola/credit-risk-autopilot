@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 
 import pandas as pd
 
-from src.model.features import FEATURES
+from src.model.train import score
 from src.utils.model_cache import AliasedModelCache
 
 MODEL_NAME = "credit-risk-classifier"
@@ -74,8 +74,8 @@ def predict(request: PredictionRequest) -> PredictionResponse:
         raise HTTPException(status_code=503, detail=str(e)) from e
 
     row = request.model_dump(by_alias=True)
-    df = pd.DataFrame([row])[FEATURES]
-    prob = float(model.predict(df)[0])
+    df = pd.DataFrame([row])
+    prob = float(score(model, df)[0])
 
     return PredictionResponse(
         predicted_prob=prob,
