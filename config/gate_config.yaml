@@ -1,0 +1,25 @@
+# Primary gate metric: AUC-PR.
+# Accuracy is close to useless at ~6.7% positive rate, so gate decisions
+# (tolerance-band, dominance, significance) all operate on AUC-PR, not accuracy.
+primary_metric: auc_pr
+
+# decision threshold, used for recall/precision reporting alongside AUC-PR
+decision_threshold: 0.5
+
+# challenger must be within this band of champion to be considered "not worse"
+# before the dominance/significance checks decide promotion
+tolerance_band: 0.01
+
+# significance test on matched champion/challenger predictions over the
+# identical newly-labeled batch (McNemar, paired)
+significance_test: mcnemar
+significance_alpha: 0.05
+
+# minimum discordant-pair count below which McNemar is considered underpowered
+# and the gate falls back to a bootstrap CI on the metric delta instead
+mcnemar_min_discordant_pairs: 15
+bootstrap_resamples: 2000
+
+# rollback: live-window vs stored reference-window comparison (4.1)
+rollback_metric_drop_threshold: 0.03
+reference_fingerprint_drift_threshold: 0.1  # Evidently drift share, staleness trigger

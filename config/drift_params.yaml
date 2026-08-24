@@ -1,0 +1,32 @@
+# Recession-scenario drift injection parameters.
+# Fixed seed so any drift shown in the audit log/dashboard can be exactly reproduced.
+seed: 42
+
+persistent_drift:
+  # active from this batch index onward, never turns off
+  start_batch: 10
+  columns:
+    DebtRatio:
+      shift: 0.15
+      scale: 1.20
+    RevolvingUtilizationOfUnsecuredLines:
+      shift: 0.10
+      scale: 1.15
+    MonthlyIncome:
+      shift: -0.20   # fractional shrink
+      scale: 1.0
+
+temporary_concept_drift:
+  # fixed window, reverts after end_batch
+  start_batch: 15
+  end_batch: 20
+  blend_ratio: 0.5  # 0 = no blend, 1 = fully collapsed onto non-delinquent centroid
+  columns:
+    - RevolvingUtilizationOfUnsecuredLines
+    - DebtRatio
+    - NumberOfTime30-59DaysPastDueNotWorse
+    - NumberOfTimes90DaysLate
+    - NumberOfTime60-89DaysPastDueNotWorse
+
+delayed_labels:
+  delay_batches: 3

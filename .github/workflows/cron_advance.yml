@@ -1,0 +1,42 @@
+name: Advance pipeline clock
+
+on:
+  schedule:
+    - cron: "0 */6 * * *"  # every 6 hours; adjust to whatever cadence suits the demo
+  workflow_dispatch: {}  # manual trigger, same entrypoint as the schedule - no separate code path
+
+jobs:
+  advance:
+    runs-on: ubuntu-latest
+    # concurrency guard is belt-and-suspenders: the real protection is the
+    # optimistic-concurrency claim in src/orchestration/clock.py (4.6a), this
+    # just avoids two overlapping cron runs burning CI minutes on a race
+    # that claim_and_run_tick would resolve into one no-op anyway.
+    concurrency:
+      group: pipeline-clock-advance
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Pull versioned data
+        run: dvc pull
+        env:
+          DVC_ACCESS_KEY_ID: ${{ secrets.DVC_ACCESS_KEY_ID }}
+          DVC_SECRET_ACCESS_KEY: ${{ secrets.DVC_SECRET_ACCESS_KEY }}
+
+      - name: Advance clock and run one tick
+        run: python scripts/advance_clock.py
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
+          MLFLOW_TRACKING_USERNAME: ${{ secrets.MLFLOW_TRACKING_USERNAME }}
+          MLFLOW_TRACKING_PASSWORD: ${{ secrets.MLFLOW_TRACKING_PASSWORD }}
+          LOGFIRE_TOKEN: ${{ secrets.LOGFIRE_TOKEN }}

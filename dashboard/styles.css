@@ -1,0 +1,75 @@
+/* Cool-neutral tokens matching .streamlit/config.toml. Hairline cards,
+   status badges, champion-lineage timeline. */
+
+:root {
+    --card-bg: #FFFFFF;
+    --card-border: #E3E6EB;
+    --text-primary: #1B1F27;
+    --text-muted: #6B7280;
+    --accent: #3B5BA5;
+    --ok: #1E8E5A;
+    --warn: #B7791F;
+    --danger: #B3261E;
+}
+
+.crg-card {
+    background: var(--card-bg);
+    border: 1px solid var(--card-border);
+    border-radius: 10px;
+    padding: 16px 20px;
+    margin-bottom: 12px;
+}
+
+.crg-metric-label {
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-muted);
+    margin-bottom: 4px;
+}
+
+.crg-metric-value {
+    font-size: 1.6rem;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.crg-badge {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: 999px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+}
+
+.crg-badge-promoted { background: #E6F4EC; color: var(--ok); }
+.crg-badge-rejected { background: #F1F2F4; color: var(--text-muted); }
+.crg-badge-rollback { background: #FBEAE9; color: var(--danger); }
+.crg-badge-stale { background: #FBF1DD; color: var(--warn); }
+
+.crg-timeline {
+    border-left: 2px solid var(--card-border);
+    margin-left: 8px;
+    padding-left: 20px;
+}
+
+.crg-timeline-item {
+    position: relative;
+    padding-bottom: 20px;
+}
+
+.crg-timeline-item::before {
+    content: "";
+    position: absolute;
+    left: -25px;
+    top: 4px;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--accent);
+}
+
+.crg-timeline-item.rolled-back::before {
+    background: var(--danger);
+}

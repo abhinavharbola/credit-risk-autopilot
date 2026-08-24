@@ -1,0 +1,47 @@
+# Verified against PyPI, August 2026. Re-check before install if building later,
+# this list is a snapshot, not a guarantee (see section 3 of the build prompt).
+
+# core
+pandas==2.2.3
+numpy==1.26.4
+scikit-learn==1.5.2
+scipy==1.14.1
+
+# tracking / registry
+mlflow==3.15.1
+
+# drift detection
+evidently==0.7.21
+
+# database
+psycopg[binary]==3.2.3
+sqlalchemy==2.0.36
+
+# data/model versioning
+dvc==3.55.2
+dvc-s3==3.2.0
+
+# serving
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+pydantic==2.9.2
+
+# tracing
+logfire==3.1.0
+
+# dashboard
+streamlit==1.40.1
+
+# llm call (challenger explanation)
+groq==0.13.0
+
+# testing / lint
+pytest==8.3.3
+ruff==0.7.4
+
+# env
+python-dotenv==1.0.1
+pyyaml==6.0.2
+
+# kaggle dataset download
+kagglehub==0.3.4
