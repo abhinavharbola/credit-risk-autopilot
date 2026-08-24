@@ -8,6 +8,10 @@ import pickle
 import sys
 from pathlib import Path
 
+# Same issue as run_demo_loop.py: running this file directly only puts
+# scripts/ on sys.path, not the repo root. Insert it before any src import.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 from src.db.connection import get_connection
 from src.orchestration.clock import claim_and_run_tick
 from src.utils.config import load_yaml

@@ -18,6 +18,12 @@ def get_engine() -> Engine:
     global _engine
     if _engine is None:
         database_url = os.environ["DATABASE_URL"]
+        # Neon's dashboard gives plain "postgresql://", which makes
+        # SQLAlchemy default to the psycopg2 driver - we install psycopg
+        # (v3) instead, so normalize the scheme rather than relying on
+        # everyone remembering to edit the copy-pasted URL by hand.
+        if database_url.startswith("postgresql://"):
+            database_url = database_url.replace("postgresql://", "postgresql+psycopg://", 1)
         _engine = create_engine(database_url, pool_pre_ping=True)
     return _engine
 

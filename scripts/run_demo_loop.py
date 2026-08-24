@@ -20,6 +20,11 @@ import pickle
 import sys
 from pathlib import Path
 
+# Running this file directly (python scripts/run_demo_loop.py) only puts
+# scripts/ on sys.path, not the repo root, so `from src...` below would
+# fail. Insert the repo root explicitly, before any src import.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 import mlflow
 import pandas as pd
 

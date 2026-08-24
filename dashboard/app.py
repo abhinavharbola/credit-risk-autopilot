@@ -4,9 +4,15 @@ Drift, Audit log). Theme comes from .streamlit/config.toml; scoped extra CSS
 dashboard/styles.css.
 """
 
+import sys
 from pathlib import Path
 
 import streamlit as st
+
+# streamlit run dashboard/app.py puts dashboard/ itself on sys.path, not the
+# repo root, so `from src...` / `from dashboard...` below would fail. Insert
+# the repo root explicitly, before any of those imports.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from dashboard.views import audit_log, drift, lineage, overview
 from src.db.connection import get_engine
