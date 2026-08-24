@@ -12,7 +12,6 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pandas as pd
 
-from src.gate.evaluate import GateResult
 from src.model.features import TARGET
 from src.orchestration.pipeline import retrain_and_gate
 

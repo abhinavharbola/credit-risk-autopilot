@@ -8,7 +8,6 @@ from contextlib import contextmanager
 
 from dotenv import load_dotenv
 from sqlalchemy import Engine, create_engine
-from sqlalchemy.engine import Connection
 
 load_dotenv()
 

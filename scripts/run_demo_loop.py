@@ -21,6 +21,7 @@ import sys
 from pathlib import Path
 
 import mlflow
+import pandas as pd
 
 from src.data.ingest import confirm_positive_rate, download_dataset, load_raw
 from src.data.split import (
@@ -46,7 +47,7 @@ N_TICKS = 25
 MODEL_NAME = "credit-risk-classifier"
 
 
-def prepare_data() -> tuple[list, "pd.DataFrame", "pd.DataFrame"]:
+def prepare_data() -> tuple[list, pd.DataFrame, pd.DataFrame]:
     print("downloading + loading raw data...")
     path = download_dataset()
     raw = load_raw(path)
