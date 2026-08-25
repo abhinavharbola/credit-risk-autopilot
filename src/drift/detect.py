@@ -4,12 +4,12 @@ Reused for both the retrain trigger and the 4.1 rollback-reference fingerprint
 check, so both always compare against the same canonical reference (the
 training pool) and produce fingerprints that are comparable across time.
 
-NOTE: Evidently's raw report dict is deep and has shifted shape across minor
-versions. _reduce_to_fingerprint() below has not been run against a live
-Evidently install in this environment (no network here) - verify the exact
-metric_id / value keys against the installed 0.7.x version before relying on
-this in a real run, per the build prompt's own caution about not trusting
-tutorial code blindly.
+_reduce_to_fingerprint() has been verified against a real
+evidently==0.7.21 report.dict() output (see its docstring for the actual
+observed schema). An earlier version of this function was written against
+guessed key names and silently returned drift_share=None on every call,
+because it matched on a metric_id key that doesn't exist in the real output
+- see that function's docstring for the corrected field to match on.
 """
 
 from typing import Any
@@ -42,26 +42,60 @@ def _reduce_to_fingerprint(raw: dict[str, Any]) -> dict[str, Any]:
     """Pulls just the two numbers this project's rollback/retrain logic needs
     out of Evidently's raw dict, so downstream code never depends on
     Evidently's internal shape beyond this one function.
+
+    Verified against a live evidently==0.7.21 report.dict() output (not
+    guessed from docs, which only cover the pre-1.0 API shape). Real shape:
+
+        {
+          "metrics": [
+            {
+              "id": "...",
+              "metric_name": "DriftedColumnsCount(drift_share=0.5)",
+              "config": {"type": "evidently:metric_v2:DriftedColumnsCount", ...},
+              "value": {"count": 1.0, "share": 0.333...}
+            },
+            {
+              "metric_name": "ValueDrift(column=DebtRatio,method=K-S p_value,...)",
+              "config": {"type": "evidently:metric_v2:ValueDrift", "column": "DebtRatio", ...},
+              "value": 4.57e-66
+            },
+            ...
+          ]
+        }
+
+    config["type"] is the stable field to match on (versioned identifier
+    string), not metric_name (a human-readable string whose exact format
+    isn't a documented contract) and not metric_id (doesn't exist - this was
+    the actual bug: matching on a key that was never present meant every
+    check silently matched nothing and drift_share stayed None forever).
+
+    Note: ValueDrift's default value is a K-S test p-value - LOWER means
+    MORE drift, opposite of an intuitive "drift score" scale. This project
+    only thresholds on drift_share (DriftedColumnsCount's share of columns
+    that individually crossed their drift test), so that inversion doesn't
+    affect the retrain trigger. The per-column p-values are still useful for
+    the staleness check as a "has this column's relationship to the
+    reference changed" signal - an absolute delta between two snapshots at
+    different times is meaningful either way, regardless of which direction
+    "more drift" points.
     """
     drift_share = None
-    column_scores: dict[str, float] = {}
+    column_p_values: dict[str, float] = {}
 
     for metric in raw.get("metrics", []):
-        metric_id = str(metric.get("metric_id", "") or metric.get("metric", ""))
+        metric_type = metric.get("config", {}).get("type", "")
         value = metric.get("value")
 
-        if "drifted_columns" in metric_id.lower() or "dataset_drift" in metric_id.lower():
+        if metric_type == "evidently:metric_v2:DriftedColumnsCount":
             if isinstance(value, dict) and "share" in value:
                 drift_share = value["share"]
-            elif isinstance(value, (int, float)):
-                drift_share = float(value)
 
-        if "valuedrift" in metric_id.lower() or "driftscore" in metric_id.lower():
-            column = metric.get("column_name") or metric.get("parameters", {}).get("column_name")
+        elif metric_type == "evidently:metric_v2:ValueDrift":
+            column = metric.get("config", {}).get("column")
             if column and isinstance(value, (int, float)):
-                column_scores[column] = float(value)
+                column_p_values[column] = float(value)
 
-    return {"drift_share": drift_share, "column_drift_scores": column_scores}
+    return {"drift_share": drift_share, "column_drift_scores": column_p_values}
 
 
 def check_retrain_trigger(
