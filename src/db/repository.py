@@ -88,6 +88,27 @@ def release_labels_bulk(
     )
 
 
+def get_labeled_predictions(
+    conn: Connection, model_alias: str = "production"
+) -> list[dict[str, Any]]:
+    """All predictions whose true_label has been released so far, for
+    reconstructing an expanding challenger training set (see
+    src/orchestration/pipeline.py:build_expanded_training_pool). Reads from
+    Postgres rather than any in-memory accumulation, since advance_clock.py
+    runs as a fresh process per cron invocation and can't rely on state
+    persisting between ticks - the database is the only durable source of
+    "what have we actually observed and labeled so far."
+    """
+    result = conn.execute(
+        text(
+            "SELECT features, true_label FROM predictions "
+            "WHERE true_label IS NOT NULL AND model_alias = :model_alias"
+        ),
+        {"model_alias": model_alias},
+    )
+    return [dict(row._mapping) for row in result]
+
+
 def get_predictions_for_batch(
     conn: Connection, batch_id: int, model_alias: str | None = None
 ) -> list[dict[str, Any]]:

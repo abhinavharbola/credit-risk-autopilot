@@ -15,6 +15,7 @@ from sqlalchemy.engine import Connection
 
 from src.data.drift_injection import inject_drift
 from src.db.repository import (
+    get_labeled_predictions,
     get_predictions_for_batch,
     insert_predictions_bulk,
     release_labels_bulk,
@@ -22,7 +23,7 @@ from src.db.repository import (
 )
 from src.drift.detect import check_retrain_trigger
 from src.gate.evaluate import compute_metric, evaluate_gate
-from src.model.features import TARGET
+from src.model.features import ALL_COLUMNS, TARGET
 from src.model.train import score as score_model
 from src.model.train import train_challenger
 from src.orchestration.promote import check_rollback, promote_challenger
@@ -83,6 +84,34 @@ def release_due_labels(
     for row, true_label in zip(rows, due_batch_df[TARGET]):
         row["true_label"] = int(true_label)
     return rows
+
+
+def build_expanded_training_pool(
+    conn: Connection, base_training_pool_df: pd.DataFrame
+) -> pd.DataFrame:
+    """Challenger retrains must incorporate newly-labeled data, not just the
+    original bootstrap training pool - otherwise every "challenger" is a
+    byte-identical clone of the champion (same data in, same deterministic
+    LogisticRegression out), and the gate can never tell them apart. This is
+    a fix for exactly that bug: an earlier version of run_tick always passed
+    the static base pool to train_challenger, so champion_metric and
+    challenger_metric came out identical on every single tick.
+
+    Reconstructs all labeled predictions released so far from the database
+    (the durable source of truth - see get_labeled_predictions) and appends
+    them to the base pool. Growing the training set this way, rather than
+    replacing it, also means the challenger never has less signal than the
+    champion did when it was last trained.
+    """
+    labeled_rows = get_labeled_predictions(conn)
+    if not labeled_rows:
+        return base_training_pool_df
+
+    incremental_df = pd.DataFrame([row["features"] for row in labeled_rows])
+    incremental_df[TARGET] = [row["true_label"] for row in labeled_rows]
+    incremental_df = incremental_df[ALL_COLUMNS]
+
+    return pd.concat([base_training_pool_df, incremental_df], ignore_index=True)
 
 
 def retrain_and_gate(
@@ -171,11 +200,12 @@ def run_tick(
         result["labels_released_for_batch"] = due_batch_index
 
         if triggered:
+            expanded_training_df = build_expanded_training_pool(conn, training_pool_df)
             gate_outcome = retrain_and_gate(
                 conn,
                 due_batch_df,
                 production_model,
-                training_pool_df,
+                expanded_training_df,
                 config["gate"],
                 run_name=f"challenger-batch-{current_batch}",
             )
