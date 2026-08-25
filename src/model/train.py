@@ -8,17 +8,47 @@ deprecated stage-based API).
 import numpy as np
 import mlflow
 import pandas as pd
+from dotenv import load_dotenv
 from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
 from src.model.features import FEATURES, TARGET
 
+# Loaded here explicitly, not just as a side-effect of importing
+# src.db.connection elsewhere. This module talks to MLflow directly and
+# needs MLFLOW_TRACKING_URI/USERNAME/PASSWORD from .env regardless of
+# whether anything database-related has been imported yet - a standalone
+# script that only imports this module (e.g. scripts/smoke_test_mlflow.py)
+# would otherwise silently fall back to MLflow's local default tracking
+# store instead of erroring, which is exactly the trap that produced a
+# false-positive "MLflow connectivity OK" smoke test result.
+load_dotenv()
+
 MODEL_NAME = "credit-risk-classifier"
+EXPERIMENT_NAME = "credit-risk-governance-v2"
+
+
+def _ensure_experiment() -> None:
+    """Explicitly get-or-creates a named experiment instead of relying on
+    MLflow's implicit default experiment (id "0") existing. Without this,
+    every start_run() call depends on that default experiment still being
+    valid server-side - if it's ever deleted, archived, or otherwise
+    unavailable (e.g. from cleanup done in the tracking server's UI),
+    CreateRun fails with an opaque RestException that gives no hint the
+    actual problem is the experiment, not the run. Called on every
+    train_challenger() call rather than cached behind a flag: set_experiment
+    is cheap and idempotent, and this way the code self-heals if the
+    experiment is ever deleted again later, rather than trusting a
+    one-time check.
+    """
+    mlflow.set_experiment(EXPERIMENT_NAME)
 
 
 def train_challenger(train_df: pd.DataFrame, run_name: str) -> tuple[str, str, Pipeline]:
     """Trains and logs a challenger. Returns (run_id, registered_version, model)."""
+    _ensure_experiment()
+
     X = train_df[FEATURES]
     y = train_df[TARGET]
 

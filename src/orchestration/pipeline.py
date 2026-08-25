@@ -260,11 +260,15 @@ def run_tick(
         rollback_result = check_rollback(
             conn,
             due_batch_df,
+            live_prob,
             live_metrics,
             training_pool_df,
             config["gate"]["primary_metric"],
+            config["gate"]["decision_threshold"],
             config["gate"]["rollback_metric_drop_threshold"],
             config["gate"]["reference_fingerprint_drift_threshold"],
+            bootstrap_resamples=config["gate"]["bootstrap_resamples"],
+            significance_alpha=config["gate"]["significance_alpha"],
         )
         result["rollback"] = rollback_result
 

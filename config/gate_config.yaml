@@ -22,4 +22,16 @@ bootstrap_resamples: 2000
 
 # rollback: live-window vs stored reference-window comparison (4.1)
 rollback_metric_drop_threshold: 0.03
-reference_fingerprint_drift_threshold: 0.1  # Evidently drift share, staleness trigger
+
+# Evidently drift share (fraction of the 10 features individually flagged
+# drifted, each at K-S p<0.05) - used for both the retrain trigger and the
+# 4.1 rollback-reference staleness check.
+#
+# 0.1 (1 of 10 columns) is too low: with 10 independent per-column tests at
+# alpha=0.05 and no multiple-testing correction, P(at least one column
+# spuriously flags) = 1 - 0.95^10 ~= 40% on a batch with zero real drift.
+# 0.3 (3+ of 10 columns) drops that false-positive rate to ~1% (binomial,
+# P(X>=3) with n=10, p=0.05), while still reliably catching real injected
+# drift: persistent drift alone touches 3 columns, the concept-drift window
+# touches 5.
+reference_fingerprint_drift_threshold: 0.3

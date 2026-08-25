@@ -88,10 +88,35 @@ def test_reduce_to_fingerprint_never_returns_none_drift_share_for_valid_output()
 
 
 def test_retrain_would_trigger_at_the_configured_threshold():
+    """Uses config/gate_config.yaml's actual reference_fingerprint_drift_threshold
+    (0.3, not the original 0.1 - raised after a real run showed 0.1 producing
+    false retrain triggers on undrifted batches from multiple-testing noise
+    alone, see the comment in gate_config.yaml for the statistical rationale).
+    The captured sample has drift_share=0.333 (1 of the 3 tested columns
+    flagged), which still clears 0.3.
+    """
     fingerprint = _reduce_to_fingerprint(REAL_EVIDENTLY_OUTPUT)
-    threshold = 0.1  # config/gate_config.yaml: reference_fingerprint_drift_threshold
+    threshold = 0.3  # config/gate_config.yaml: reference_fingerprint_drift_threshold
     triggered = fingerprint["drift_share"] is not None and fingerprint["drift_share"] >= threshold
     assert triggered is True
+
+
+def test_single_column_noise_does_not_trigger_at_the_raised_threshold():
+    """The actual bug this threshold change fixes: a fingerprint where only
+    one feature out of ten spuriously flags (share=0.1, exactly the old
+    threshold) must NOT trigger a retrain - that's multiple-testing noise on
+    an undrifted batch, not real drift.
+    """
+    single_column_noise = {
+        "drift_share": 0.1,
+        "column_drift_scores": {"DebtRatio": 0.03},
+    }
+    threshold = 0.3
+    triggered = (
+        single_column_noise["drift_share"] is not None
+        and single_column_noise["drift_share"] >= threshold
+    )
+    assert triggered is False
 
 
 def test_reduce_to_fingerprint_handles_missing_metrics_key_gracefully():

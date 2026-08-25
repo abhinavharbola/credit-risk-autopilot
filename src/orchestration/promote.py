@@ -20,6 +20,8 @@ from src.db.repository import (
     write_audit_log,
 )
 from src.drift.detect import check_fingerprint_staleness, compute_fingerprint
+from src.gate.evaluate import bootstrap_metric_ci
+from src.model.features import TARGET
 
 MODEL_NAME = "credit-risk-classifier"
 
@@ -86,13 +88,18 @@ def find_previous_champion(
 def check_rollback(
     conn: Connection,
     live_batch_df,
+    live_prob,
     live_metrics: dict[str, float],
     training_pool_df,
     metric_name: str,
+    decision_threshold: float,
     drop_threshold: float,
     fingerprint_drift_threshold: float,
+    bootstrap_resamples: int = 2000,
+    significance_alpha: float = 0.05,
+    seed: int = 42,
 ) -> dict[str, Any]:
-    """Two-step rollback check (4.1):
+    """Two-step rollback check (4.1), plus a significance check (this pass):
 
       1. Has the stored reference window's fingerprint diverged materially
          from live traffic? If so, the reference is no longer apples-to-apples
@@ -103,6 +110,15 @@ def check_rollback(
       2. If the reference is still fresh, compare live_metrics against the
          stored window_metrics - a same-distribution comparison, never
          live-vs-pristine-holdout.
+      3. If step 2's point estimate looks like a real drop, confirm it with
+         a bootstrap CI on the live batch before actually rolling back - a
+         raw point-estimate threshold on ~200 rows and a handful of
+         positives swings on sampling noise alone (a real run showed
+         rollback_triggered=True on drops that were pure noise, with
+         nothing to actually roll back to yet). Requires the CI's upper
+         (optimistic) bound to still fall below the drop threshold, not
+         just the single point estimate - the same rigor the promotion
+         gate already applies via McNemar/bootstrap on the other side.
     """
     current = get_latest_champion(conn)
     if current is None:
@@ -140,7 +156,21 @@ def check_rollback(
         if stored_metric is not None and live_metric is not None
         else None
     )
-    rollback_triggered = drop is not None and drop >= drop_threshold
+    point_estimate_flagged = drop is not None and drop >= drop_threshold
+
+    rollback_triggered = False
+    ci_lower = ci_upper = None
+    if point_estimate_flagged:
+        ci_lower, ci_upper = bootstrap_metric_ci(
+            live_batch_df[TARGET].to_numpy(),
+            live_prob,
+            metric_name,
+            decision_threshold,
+            bootstrap_resamples,
+            seed,
+            significance_alpha,
+        )
+        rollback_triggered = ci_upper < (stored_metric - drop_threshold)
 
     write_audit_log(
         conn,
@@ -150,6 +180,9 @@ def check_rollback(
             "stored_metric": stored_metric,
             "live_metric": live_metric,
             "drop": drop,
+            "point_estimate_flagged": point_estimate_flagged,
+            "bootstrap_ci_lower": ci_lower,
+            "bootstrap_ci_upper": ci_upper,
             "rollback_triggered": rollback_triggered,
             "reference_stale": False,
         },

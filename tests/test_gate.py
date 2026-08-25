@@ -4,7 +4,7 @@ repo (build order step 4) - zero I/O, all synthetic inputs.
 
 import numpy as np
 
-from src.gate.evaluate import compute_metric, evaluate_gate
+from src.gate.evaluate import bootstrap_metric_ci, compute_metric, evaluate_gate
 
 CONFIG = {
     "primary_metric": "auc_pr",
@@ -142,3 +142,49 @@ def test_gate_result_to_dict_is_json_serializable():
     result = evaluate_gate(y_true, champion_prob, challenger_prob, CONFIG)
     serialized = json.dumps(result.to_dict())
     assert isinstance(serialized, str)
+
+
+def test_bootstrap_metric_ci_returns_lower_le_upper():
+    rng = np.random.default_rng(7)
+    n = 200
+    y_true = rng.choice([0, 1], size=n, p=[0.9, 0.1])
+    y_prob = np.where(y_true == 1, rng.uniform(0.5, 1.0, n), rng.uniform(0.0, 0.5, n))
+
+    lower, upper = bootstrap_metric_ci(
+        y_true, y_prob, "auc_pr", decision_threshold=0.5,
+        n_resamples=500, seed=1, alpha=0.05,
+    )
+
+    assert lower <= upper
+
+
+def test_bootstrap_metric_ci_is_reproducible_given_same_seed():
+    rng = np.random.default_rng(3)
+    n = 150
+    y_true = rng.choice([0, 1], size=n, p=[0.85, 0.15])
+    y_prob = rng.uniform(0, 1, n)
+
+    ci_a = bootstrap_metric_ci(y_true, y_prob, "auc_pr", 0.5, 500, 42, 0.05)
+    ci_b = bootstrap_metric_ci(y_true, y_prob, "auc_pr", 0.5, 500, 42, 0.05)
+
+    assert ci_a == ci_b
+
+
+def test_bootstrap_metric_ci_narrows_with_larger_sample():
+    """Larger, more consistent samples should produce a tighter CI than a
+    small noisy one - a basic sanity check that this behaves like a real CI.
+    Uses overlapping (not perfectly separable) score distributions, since
+    perfect separation pins AUC-PR at 1.0 regardless of sample size and
+    leaves nothing for sample size to narrow.
+    """
+    rng = np.random.default_rng(11)
+
+    small_y = rng.choice([0, 1], size=30, p=[0.8, 0.2])
+    small_prob = np.where(small_y == 1, rng.uniform(0.3, 0.9, 30), rng.uniform(0.1, 0.7, 30))
+    small_lower, small_upper = bootstrap_metric_ci(small_y, small_prob, "auc_pr", 0.5, 1000, 1, 0.05)
+
+    large_y = rng.choice([0, 1], size=3000, p=[0.8, 0.2])
+    large_prob = np.where(large_y == 1, rng.uniform(0.3, 0.9, 3000), rng.uniform(0.1, 0.7, 3000))
+    large_lower, large_upper = bootstrap_metric_ci(large_y, large_prob, "auc_pr", 0.5, 1000, 1, 0.05)
+
+    assert (large_upper - large_lower) < (small_upper - small_lower)

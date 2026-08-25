@@ -79,6 +79,40 @@ def _mcnemar(
     return float(chi2), pvalue, n_discordant
 
 
+def bootstrap_metric_ci(
+    y_true,
+    y_prob,
+    metric: str,
+    decision_threshold: float,
+    n_resamples: int,
+    seed: int,
+    alpha: float,
+) -> tuple[float, float]:
+    """Bootstrap CI on a single model's metric over one batch, resampling
+    rows with replacement. Public (unlike _bootstrap_delta_ci above, which
+    is champion-vs-challenger specific): used by the rollback check
+    (src/orchestration/promote.py) to confirm an apparent metric drop holds
+    up across resamples of the batch, not just a single noisy point
+    estimate from ~200 rows and a handful of positives - the same class of
+    small-sample risk the gate's own significance check already guards
+    against on the promotion side. Before this, rollback triggered on a
+    raw point-estimate threshold with no equivalent safeguard.
+    """
+    rng = np.random.default_rng(seed)
+    y_true = np.asarray(y_true)
+    y_prob = np.asarray(y_prob)
+    n = len(y_true)
+    values = np.empty(n_resamples)
+
+    for i in range(n_resamples):
+        idx = rng.integers(0, n, size=n)
+        values[i] = compute_metric(y_true[idx], y_prob[idx], metric, decision_threshold)
+
+    lower = float(np.percentile(values, 100 * (alpha / 2)))
+    upper = float(np.percentile(values, 100 * (1 - alpha / 2)))
+    return lower, upper
+
+
 def _bootstrap_delta_ci(
     y_true: np.ndarray,
     champion_prob: np.ndarray,
