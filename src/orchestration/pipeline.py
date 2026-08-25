@@ -86,6 +86,10 @@ def release_due_labels(
     return rows
 
 
+MAX_BASE_POOL_SAMPLE = 3000
+BASE_POOL_SAMPLE_SEED = 123
+
+
 def build_expanded_training_pool(
     conn: Connection, base_training_pool_df: pd.DataFrame
 ) -> pd.DataFrame:
@@ -102,6 +106,18 @@ def build_expanded_training_pool(
     them to the base pool. Growing the training set this way, rather than
     replacing it, also means the challenger never has less signal than the
     champion did when it was last trained.
+
+    The base pool is capped at MAX_BASE_POOL_SAMPLE rows before concatenating.
+    Without this cap, a real run exposed a second bug: the full ~127K-row
+    base pool drowns out a few hundred newly-labeled (post-drift) rows into
+    a rounding error, so the challenger could never adapt enough to actually
+    beat the champion by more than sampling noise - 0 promotions across a
+    full 25-tick run despite real, measurable drift, every gate rejection
+    landing on "not statistically significant" because there was never
+    enough signal in the training data for a real difference to exist.
+    Subsampling the base pool lets accumulated post-drift labels carry
+    meaningful weight as they grow across ticks, letting the challenger's
+    coefficients actually shift to track drift.
     """
     labeled_rows = get_labeled_predictions(conn)
     if not labeled_rows:
@@ -111,7 +127,14 @@ def build_expanded_training_pool(
     incremental_df[TARGET] = [row["true_label"] for row in labeled_rows]
     incremental_df = incremental_df[ALL_COLUMNS]
 
-    return pd.concat([base_training_pool_df, incremental_df], ignore_index=True)
+    if len(base_training_pool_df) > MAX_BASE_POOL_SAMPLE:
+        base_sample = base_training_pool_df.sample(
+            n=MAX_BASE_POOL_SAMPLE, random_state=BASE_POOL_SAMPLE_SEED
+        )
+    else:
+        base_sample = base_training_pool_df
+
+    return pd.concat([base_sample, incremental_df], ignore_index=True)
 
 
 def retrain_and_gate(

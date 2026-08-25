@@ -142,6 +142,55 @@ def test_build_expanded_training_pool_returns_base_unchanged_when_nothing_labele
     assert expanded is base_pool
 
 
+def test_build_expanded_training_pool_caps_large_base_pool_so_recent_labels_carry_weight():
+    """This is the second fix a real 25-tick run exposed: even after fixing
+    the identical-predictions bug, a full ~127K-row base pool drowned out a
+    few hundred newly-labeled post-drift rows into statistical noise (never
+    more than a handful of discordant pairs, bootstrap CIs always straddling
+    zero) - 0 promotions across a full run despite real, persistent drift.
+    Capping the base pool's contribution lets accumulated labels actually
+    move the needle.
+    """
+    from src.orchestration.pipeline import MAX_BASE_POOL_SAMPLE, build_expanded_training_pool
+
+    large_base_pool = make_labeled_batch(n=MAX_BASE_POOL_SAMPLE + 5000, seed=0)
+    conn = MagicMock()
+    fake_labeled_rows = [
+        {"features": row.drop(TARGET).to_dict(), "true_label": int(row[TARGET])}
+        for _, row in make_labeled_batch(n=100, seed=99).iterrows()
+    ]
+
+    with patch(
+        "src.orchestration.pipeline.get_labeled_predictions", return_value=fake_labeled_rows
+    ):
+        expanded = build_expanded_training_pool(conn, large_base_pool)
+
+    # base pool contribution is capped, not the full ~132K rows
+    assert len(expanded) == MAX_BASE_POOL_SAMPLE + len(fake_labeled_rows)
+    # recent labeled data now makes up a meaningful share, not a rounding error
+    recent_share = len(fake_labeled_rows) / len(expanded)
+    assert recent_share > 0.01  # would be ~0.00075 without the cap on a 132K pool
+
+
+def test_build_expanded_training_pool_does_not_cap_when_base_pool_already_small():
+    from src.orchestration.pipeline import build_expanded_training_pool
+
+    small_base_pool = make_labeled_batch(n=50, seed=0)
+    conn = MagicMock()
+    fake_labeled_rows = [
+        {"features": row.drop(TARGET).to_dict(), "true_label": int(row[TARGET])}
+        for _, row in make_labeled_batch(n=10, seed=99).iterrows()
+    ]
+
+    with patch(
+        "src.orchestration.pipeline.get_labeled_predictions", return_value=fake_labeled_rows
+    ):
+        expanded = build_expanded_training_pool(conn, small_base_pool)
+
+    # base pool is well under the cap, so all of it is kept, none dropped
+    assert len(expanded) == len(small_base_pool) + len(fake_labeled_rows)
+
+
 def test_retrain_and_gate_can_actually_promote_when_pools_differ():
     """End-to-end sanity check of the fix: when the challenger is trained on
     a genuinely different (expanded) pool than what produced the champion,

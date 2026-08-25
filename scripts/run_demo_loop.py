@@ -38,6 +38,7 @@ from src.data.split import (
 )
 from src.db.connection import get_connection, run_migrations
 from src.db.repository import insert_champion_history, write_audit_log
+from src.drift.detect import compute_fingerprint
 from src.gate.evaluate import compute_metric
 from src.model.features import TARGET
 from src.model.train import score, train_challenger
@@ -96,6 +97,14 @@ def bootstrap_champion(train_pool_df, holdout_df) -> None:
     holdout_prob = score(model, holdout_df)
     holdout_metric = compute_metric(holdout_df[TARGET].to_numpy(), holdout_prob, "auc_pr", 0.5)
 
+    # Real fingerprint (holdout vs training pool - both drawn from the same
+    # underlying distribution), not a hardcoded zero. A fake zero baseline
+    # exaggerates staleness flagging: any real 200-row batch naturally shows
+    # some nonzero drift_share from sampling noise alone against a 127K-row
+    # reference, even before any injected drift begins, so comparing against
+    # a fabricated "perfect zero" overstates how much has actually changed.
+    bootstrap_fingerprint = compute_fingerprint(holdout_df, train_pool_df)
+
     with get_connection() as conn:
         champion_history_id = insert_champion_history(
             conn,
@@ -105,7 +114,7 @@ def bootstrap_champion(train_pool_df, holdout_df) -> None:
                 # no drifted window exists yet at bootstrap time, so the
                 # holdout metric stands in as the initial rollback reference
                 "window_metrics": {"auc_pr": holdout_metric},
-                "drift_fingerprint": {"drift_share": 0.0, "column_drift_scores": {}},
+                "drift_fingerprint": bootstrap_fingerprint,
             },
         )
         write_audit_log(
