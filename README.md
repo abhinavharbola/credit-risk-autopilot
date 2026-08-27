@@ -7,13 +7,13 @@ Built as a portfolio project on entirely free-tier infrastructure: no paid APIs,
 ## Preview
 
 <p align="center">
-  <img src="docs/screenshots/overview.png" width="720" alt="Streamlit dashboard overview showing current batch, production model version, promotion/rollback counts, and an audit_log event-type bar chart">
+  <img src="images/main_ui.png" width="720" alt="Streamlit dashboard overview showing current batch, production model version, promotion/rollback counts, and an audit_log event-type bar chart">
   <br>
   <sub><em>Overview: current clock position, current champion's window AUC-PR, and a full breakdown of every governance event type recorded.</em></sub>
 </p>
 
 <p align="center">
-  <img src="docs/screenshots/drift.png" width="720" alt="Line chart of drift share per batch with retrain-triggered batches called out, plus a raw drift-check table">
+  <img src="images/drift_ui.png" width="720" alt="Line chart of drift share per batch with retrain-triggered batches called out, plus a raw drift-check table">
   <br>
   <sub><em>Drift: per-batch drift share against the training reference, with retrain-triggered batches marked (0, 1, 10, 16, 23, 24 in this run, matching the recession scenario's injected drift windows).</em></sub>
 </p>
