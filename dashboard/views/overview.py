@@ -10,12 +10,12 @@ import streamlit as st
 from src.db.repository import get_audit_log, get_champion_history, get_pipeline_state
 
 EVENT_COLORS = {
-    "drift_check": "#6172F3",
-    "gate_evaluation": "#7C3AED",
-    "promotion": "#027A48",
-    "rollback": "#B42318",
-    "rollback_check": "#B54708",
-    "label_release": "#98A2B3",
+    "drift_check": "#1B9AAA",
+    "gate_evaluation": "#5E60CE",
+    "promotion": "#0B7A44",
+    "rollback": "#B9382A",
+    "rollback_check": "#C05D0C",
+    "label_release": "#7A8F88",
 }
 
 
@@ -105,11 +105,11 @@ def render(engine) -> None:
     fig.update_layout(
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
-        font=dict(family="Inter, sans-serif", color="#475467", size=12),
+        font=dict(family="Inter, sans-serif", color="#4A5D56", size=12),
         margin=dict(l=10, r=10, t=10, b=10),
         height=280,
         xaxis=dict(showgrid=False, tickfont=dict(size=11)),
-        yaxis=dict(showgrid=True, gridcolor="#EEF1F5", zeroline=False),
+        yaxis=dict(showgrid=True, gridcolor="#E8EDEB", zeroline=False),
         showlegend=False,
     )
     st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
