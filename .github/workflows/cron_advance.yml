@@ -36,10 +36,14 @@ jobs:
             echo "it will fail with a generic 'not inside of a DVC repository'"
             echo "error that doesn't explain any of this."
             echo ""
-            echo "One-time local setup required (see README.md 'Getting started'):"
+            echo "One-time local setup required (see README.md 'Getting started' step 5"
+            echo "for the full version and why - DagsHub's DVC remote needs an"
+            echo "endpointurl set separately, this is a common thing to miss):"
             echo "  dvc init"
-            echo "  dvc remote add -d origin s3://<your-dagshub-bucket>"
-            echo "  dvc remote modify origin --local access_key_id <dagshub-username>"
+            echo "  dvc remote add -d origin s3://dvc"
+            echo "  dvc remote default origin"
+            echo "  dvc remote modify origin endpointurl https://dagshub.com/<user>/<repo>.s3"
+            echo "  dvc remote modify origin --local access_key_id <dagshub-token>"
             echo "  dvc remote modify origin --local secret_access_key <dagshub-token>"
             echo "  dvc add data/processed/pretrain_batches.pkl data/processed/training_pool.pkl data/processed/holdout.pkl data/raw/cs-training.csv"
             echo "  git add data/processed/*.dvc data/raw/*.dvc .dvc/config"
@@ -50,7 +54,8 @@ jobs:
           if [ -z "${{ secrets.DVC_ACCESS_KEY_ID }}" ] || [ -z "${{ secrets.DVC_SECRET_ACCESS_KEY }}" ]; then
             echo "::error::DVC_ACCESS_KEY_ID and/or DVC_SECRET_ACCESS_KEY repo secrets are not set."
             echo "Add them under Settings -> Secrets and variables -> Actions."
-            echo "Values are your DagsHub username and a DagsHub access token."
+            echo "Values are both your DagsHub access token (same token for both secrets,"
+            echo "not a username/token pair)."
             exit 1
           fi
           echo "DVC setup looks complete, proceeding to pull."
@@ -58,8 +63,12 @@ jobs:
       - name: Pull versioned data
         run: dvc pull
         env:
-          DVC_ACCESS_KEY_ID: ${{ secrets.DVC_ACCESS_KEY_ID }}
-          DVC_SECRET_ACCESS_KEY: ${{ secrets.DVC_SECRET_ACCESS_KEY }}
+          # dvc-s3 is boto3-based; boto3's env var credential fallback only
+          # recognizes AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY, not arbitrary
+          # names. The GitHub secrets themselves can stay named DVC_*, this
+          # is just the env var mapping dvc pull actually needs to see.
+          AWS_ACCESS_KEY_ID: ${{ secrets.DVC_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.DVC_SECRET_ACCESS_KEY }}
 
       - name: Advance clock and run one tick
         run: python scripts/advance_clock.py

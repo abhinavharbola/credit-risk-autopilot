@@ -9,14 +9,16 @@ Built as a portfolio project on entirely free-tier infrastructure: no paid APIs,
 <p align="center">
   <img src="images/main_ui.png" width="720" alt="Streamlit dashboard overview showing current batch, production model version, promotion/rollback counts, and an audit_log event-type bar chart">
   <br>
-  <sub><em>Overview: current clock position, current champion's window AUC-PR, and a full breakdown of every governance event type recorded.</em></sub>
+  <sub>Main UI: Overview of the pipeline with current champion, batches, versions and rollbacks</sub>
 </p>
 
 <p align="center">
   <img src="images/drift_ui.png" width="720" alt="Line chart of drift share per batch with retrain-triggered batches called out, plus a raw drift-check table">
   <br>
-  <sub><em>Drift: per-batch drift share against the training reference, with retrain-triggered batches marked (0, 1, 10, 16, 23, 24 in this run, matching the recession scenario's injected drift windows).</em></sub>
+  <sub>Drift tab: per-batch drift share against the training reference</sub>
 </p>
+
+> Additional screenshots for other tabs are in [`images/`](images/).
 
 ## What this is
 
