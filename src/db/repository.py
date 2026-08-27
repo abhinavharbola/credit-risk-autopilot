@@ -174,7 +174,9 @@ def mark_reference_stale(conn: Connection, champion_history_id: int, stale: bool
     )
 
 
-def record_rollback(conn: Connection, champion_history_id: int, rolled_back_to_version: str) -> None:
+def record_rollback(
+    conn: Connection, champion_history_id: int, rolled_back_to_version: str
+) -> None:
     conn.execute(
         text(
             """

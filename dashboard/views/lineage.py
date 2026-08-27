@@ -2,13 +2,15 @@
 its metrics, promotion time, and whether/where it was rolled back to.
 """
 
+import textwrap
+
 import streamlit as st
 
 from src.db.repository import get_champion_history
 
 
 def render(engine) -> None:
-    st.header("Champion lineage")
+    st.markdown('<div class="crg-section-title">Champion lineage</div>', unsafe_allow_html=True)
 
     with engine.connect() as conn:
         history = get_champion_history(conn)
@@ -17,7 +19,7 @@ def render(engine) -> None:
         st.info("No champions promoted yet.")
         return
 
-    st.markdown('<div class="crg-timeline">', unsafe_allow_html=True)
+    items_html = []
     for entry in reversed(history):
         rolled_back = entry["rolled_back_at"] is not None
         item_class = "crg-timeline-item rolled-back" if rolled_back else "crg-timeline-item"
@@ -33,28 +35,37 @@ def render(engine) -> None:
             else ""
         )
 
-        metrics_line = " · ".join(
+        metrics_line = " &middot; ".join(
             f"{k}: {v:.4f}" for k, v in entry["window_metrics"].items()
         )
 
         rollback_line = (
-            f"<div>Rolled back to version {entry['rolled_back_to_version']} "
-            f"at {entry['rolled_back_at']}</div>"
+            f'<div class="crg-timeline-meta">Rolled back to '
+            f'<span class="crg-timeline-meta-mono">v{entry["rolled_back_to_version"]}</span> '
+            f'at {entry["rolled_back_at"]}</div>'
             if rolled_back
             else ""
         )
 
-        st.markdown(
-            f"""
-            <div class="{item_class}">
-                <div class="crg-card">
-                    <strong>Version {entry['model_version']}</strong> {badge}{stale_badge}
-                    <div>Promoted at {entry['promoted_at']}</div>
-                    <div>Window metrics: {metrics_line}</div>
-                    {rollback_line}
-                </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
+        # All markup on single concatenated lines, not an indented multi-line
+        # f-string: 4+ leading spaces inside a markdown block gets misread
+        # as a code fence by Streamlit's markdown renderer, which is what
+        # produced literal "</div>" text in an earlier version of this view.
+        items_html.append(
+            f'<div class="{item_class}"><div class="crg-timeline-card">'
+            f'<span class="crg-timeline-version">v{entry["model_version"]}</span>'
+            f"{badge}{stale_badge}"
+            f'<div class="crg-timeline-meta">Promoted {entry["promoted_at"]}</div>'
+            f'<div class="crg-timeline-meta">{metrics_line}</div>'
+            f"{rollback_line}"
+            "</div></div>"
         )
-    st.markdown("</div>", unsafe_allow_html=True)
+
+    # Built and rendered as ONE st.markdown call: Streamlit renders each
+    # st.markdown call as its own isolated DOM element, so a wrapper div
+    # opened in one call and closed in another never actually nests the
+    # content between them - the wrapping styling would silently do nothing.
+    full_html = textwrap.dedent(
+        f'<div class="crg-timeline">{"".join(items_html)}</div>'
+    ).strip()
+    st.markdown(full_html, unsafe_allow_html=True)

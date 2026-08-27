@@ -77,6 +77,7 @@ Documenting these because they were the actual hard part, not the initial build:
 - **The rollback reference must be the drifted window the model was gated against, not the pristine holdout.** Comparing live performance to a frozen holdout metric conflates "the model got worse" with "the world changed since launch." Promotion stores the challenger's performance on the actual window it was evaluated against, plus a drift fingerprint of that window, so later comparisons are apples to apples, and are suppressed rather than trusted once that reference itself goes stale.
 - **Exactly one writer for the clock, and the claim happens before the work, not after.** Two overlapping callers (a scheduled run and a manual one) racing on `pipeline_state` could otherwise both do a batch's work and only one would lose the version race, leaving duplicate predictions and audit rows committed anyway. The batch is claimed via optimistic concurrency first; a losing caller does zero work.
 - **The holdout is carved before anything is fit on the data, not after.** Fitting imputation medians on the full dataset and only then splitting off a holdout leaks holdout information into training. The split happens first; medians are fit on the training pool only.
+- **Stored features must never include the answer, even silently.** Scoring wrote the full row, including the true label, into the predictions table's `features` column, before that label was supposed to be available at all under the delayed-labels simulation. Nothing was reading it back that way at the time, but it was a landmine, not a working feature. Fixed to store only the model's actual input columns.
 
 ## Data and drift simulation
 
@@ -118,7 +119,7 @@ credit-risk-governance/
 │   ├── advance_clock.py        # entrypoint cron and manual runs both call
 │   ├── run_demo_loop.py        # full bootstrap -> drift -> retrain -> promote -> rollback run
 │   └── smoke_test_mlflow.py    # fast connectivity check before a full run
-├── tests/                      # 55 tests
+├── tests/                      # 54 tests
 ├── .github/workflows/
 │   ├── ci.yml                  # lint + test on push/PR
 │   └── cron_advance.yml        # scheduled clock advance
@@ -160,7 +161,7 @@ A full 25-batch run takes roughly 5-15 minutes, dominated by MLflow round trips 
 
 ## Testing
 
-55 tests across 9 files, all pure-logic or mocked, no live infrastructure required to run them. The gate (`test_gate.py`) is the most heavily tested module: tolerance-band rejection, dominance rejection, McNemar-vs-bootstrap routing at the discordant-pair threshold, and, specifically, a fixed-seed reproduction of a challenger that looks better purely from small-sample noise, which the gate must reject.
+54 tests across 8 files, all pure-logic or mocked, no live infrastructure required to run them. The gate (`test_gate.py`) is the most heavily tested module: tolerance-band rejection, dominance rejection, McNemar-vs-bootstrap routing at the discordant-pair threshold, and, specifically, a fixed-seed reproduction of a challenger that looks better purely from small-sample noise, which the gate must reject.
 
 `tests/test_drift_detect.py` pins a real captured `evidently==0.7.21` output as a regression fixture: an earlier version of the fingerprint extraction silently matched on a key that didn't exist in the real schema and returned `drift_share=None` on every call, so retrain never triggered across a full 25-tick run despite real, measurable drift. That specific payload is now a permanent test case.
 

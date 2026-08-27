@@ -10,7 +10,6 @@ from src.data.split import (
     build_pretrain_batches,
     carve_holdout,
     fit_imputation_medians,
-    label_release_batch,
 )
 from src.model.features import TARGET
 
@@ -108,8 +107,3 @@ def test_build_pretrain_batches_fixed_size_and_reproducible():
     assert all(len(b) == 50 for b in batches_a)
     for a, b in zip(batches_a, batches_b):
         pd.testing.assert_frame_equal(a, b)
-
-
-def test_label_release_batch_applies_configured_delay():
-    assert label_release_batch(batch_index=5, delay_batches=3) == 8
-    assert label_release_batch(batch_index=0, delay_batches=3) == 3

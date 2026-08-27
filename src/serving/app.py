@@ -29,13 +29,17 @@ class PredictionRequest(BaseModel):
 
     RevolvingUtilizationOfUnsecuredLines: float = Field(ge=0)
     age: int = Field(ge=18, le=120)
-    NumberOfTime30_59DaysPastDueNotWorse: int = Field(ge=0, alias="NumberOfTime30-59DaysPastDueNotWorse")
+    NumberOfTime30_59DaysPastDueNotWorse: int = Field(
+        ge=0, alias="NumberOfTime30-59DaysPastDueNotWorse"
+    )
     DebtRatio: float = Field(ge=0)
     MonthlyIncome: float = Field(ge=0)
     NumberOfOpenCreditLinesAndLoans: int = Field(ge=0)
     NumberOfTimes90DaysLate: int = Field(ge=0)
     NumberRealEstateLoansOrLines: int = Field(ge=0)
-    NumberOfTime60_89DaysPastDueNotWorse: int = Field(ge=0, alias="NumberOfTime60-89DaysPastDueNotWorse")
+    NumberOfTime60_89DaysPastDueNotWorse: int = Field(
+        ge=0, alias="NumberOfTime60-89DaysPastDueNotWorse"
+    )
     NumberOfDependents: int = Field(ge=0)
 
     model_config = {"populate_by_name": True}

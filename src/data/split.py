@@ -62,10 +62,3 @@ def build_pretrain_batches(
         for i in range(n_batches)
     ]
     return batches
-
-
-def label_release_batch(batch_index: int, delay_batches: int) -> int:
-    """The batch index at which batch_index's ground-truth labels become
-    available, per the delayed-labels mechanic (section 2, schema note 6a).
-    """
-    return batch_index + delay_batches

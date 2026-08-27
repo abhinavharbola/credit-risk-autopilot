@@ -56,7 +56,8 @@ def test_rejects_challenger_that_looks_better_only_due_to_noisy_small_sample():
 
     result = evaluate_gate(y_true, champion_prob, challenger_prob, CONFIG, seed=0)
 
-    assert result.significance_method == "bootstrap"  # n=15 batch, too few discordant pairs for McNemar
+    # n=15 batch, too few discordant pairs for McNemar
+    assert result.significance_method == "bootstrap"
     assert result.passed_dominance is True  # looks better on point estimate
     assert result.passed_significance is False  # but not distinguishable from noise
     assert result.promote is False
@@ -181,10 +182,14 @@ def test_bootstrap_metric_ci_narrows_with_larger_sample():
 
     small_y = rng.choice([0, 1], size=30, p=[0.8, 0.2])
     small_prob = np.where(small_y == 1, rng.uniform(0.3, 0.9, 30), rng.uniform(0.1, 0.7, 30))
-    small_lower, small_upper = bootstrap_metric_ci(small_y, small_prob, "auc_pr", 0.5, 1000, 1, 0.05)
+    small_lower, small_upper = bootstrap_metric_ci(
+        small_y, small_prob, "auc_pr", 0.5, 1000, 1, 0.05
+    )
 
     large_y = rng.choice([0, 1], size=3000, p=[0.8, 0.2])
     large_prob = np.where(large_y == 1, rng.uniform(0.3, 0.9, 3000), rng.uniform(0.1, 0.7, 3000))
-    large_lower, large_upper = bootstrap_metric_ci(large_y, large_prob, "auc_pr", 0.5, 1000, 1, 0.05)
+    large_lower, large_upper = bootstrap_metric_ci(
+        large_y, large_prob, "auc_pr", 0.5, 1000, 1, 0.05
+    )
 
     assert (large_upper - large_lower) < (small_upper - small_lower)

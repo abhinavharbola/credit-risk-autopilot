@@ -1,5 +1,6 @@
 """Unit tests for drift injection: persistent drift activation, temporary
-concept drift window, and seed-based reproducibility.
+concept drift window, and deterministic reproducibility (neither transform
+uses randomness - both are fixed shift/scale/blend math).
 """
 
 import numpy as np
@@ -13,7 +14,6 @@ from src.data.drift_injection import (
 from src.model.features import TARGET
 
 PARAMS = {
-    "seed": 42,
     "persistent_drift": {
         "start_batch": 10,
         "columns": {
@@ -69,15 +69,15 @@ def test_persistent_drift_never_turns_off():
 
 def test_temporary_concept_drift_inactive_outside_window():
     batch = make_batch()
-    before = apply_temporary_concept_drift(batch, 14, PARAMS, seed=42)
-    after = apply_temporary_concept_drift(batch, 20, PARAMS, seed=42)
+    before = apply_temporary_concept_drift(batch, 14, PARAMS)
+    after = apply_temporary_concept_drift(batch, 20, PARAMS)
     pd.testing.assert_frame_equal(before, batch)
     pd.testing.assert_frame_equal(after, batch)
 
 
 def test_temporary_concept_drift_active_inside_window_blends_toward_centroid():
     batch = make_batch(n=200, seed=1)
-    out = apply_temporary_concept_drift(batch, 17, PARAMS, seed=42)
+    out = apply_temporary_concept_drift(batch, 17, PARAMS)
 
     non_delinquent_centroid = batch.loc[batch[TARGET] == 0, "DebtRatio"].mean()
     delinquent_before = batch.loc[batch[TARGET] == 1, "DebtRatio"]
@@ -96,14 +96,14 @@ def test_temporary_concept_drift_active_inside_window_blends_toward_centroid():
 
 def test_temporary_concept_drift_reverts_after_window_ends():
     batch = make_batch(n=200, seed=1)
-    inside_window = apply_temporary_concept_drift(batch, 17, PARAMS, seed=42)
-    after_window = apply_temporary_concept_drift(batch, 21, PARAMS, seed=42)
+    inside_window = apply_temporary_concept_drift(batch, 17, PARAMS)
+    after_window = apply_temporary_concept_drift(batch, 21, PARAMS)
 
     assert not inside_window.equals(batch)
     pd.testing.assert_frame_equal(after_window, batch)
 
 
-def test_inject_drift_is_reproducible_given_same_seed_and_batch_index():
+def test_inject_drift_is_deterministic_given_same_batch_index():
     batch = make_batch(n=150, seed=2)
     out_a = inject_drift(batch, batch_index=17, params=PARAMS)
     out_b = inject_drift(batch, batch_index=17, params=PARAMS)

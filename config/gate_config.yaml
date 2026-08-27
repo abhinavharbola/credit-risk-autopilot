@@ -10,9 +10,12 @@ decision_threshold: 0.5
 # before the dominance/significance checks decide promotion
 tolerance_band: 0.01
 
-# significance test on matched champion/challenger predictions over the
-# identical newly-labeled batch (McNemar, paired)
-significance_test: mcnemar
+# Significance check on matched champion/challenger predictions over the
+# identical newly-labeled batch: McNemar (paired) when there are enough
+# discordant pairs, a bootstrap CI on the metric delta otherwise (see
+# mcnemar_min_discordant_pairs below). This routing is fixed logic in
+# src/gate/evaluate.py, not a config choice - there is no key here to force
+# one method over the other.
 significance_alpha: 0.05
 
 # minimum discordant-pair count below which McNemar is considered underpowered

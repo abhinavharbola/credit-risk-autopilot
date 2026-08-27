@@ -214,7 +214,10 @@ def evaluate_gate(
     elif not passed_dominance:
         reason = "challenger does not exceed champion (tie or worse within tolerance), rejected"
     elif not passed_significance:
-        reason = f"improvement not statistically significant via {significance_method}, likely noise, rejected"
+        reason = (
+            f"improvement not statistically significant via {significance_method}, "
+            "likely noise, rejected"
+        )
     else:
         reason = f"challenger significantly beats champion via {significance_method}, promoted"
 

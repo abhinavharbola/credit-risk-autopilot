@@ -45,7 +45,7 @@ def apply_persistent_drift(
 
 
 def apply_temporary_concept_drift(
-    batch_df: pd.DataFrame, batch_index: int, params: dict, seed: int
+    batch_df: pd.DataFrame, batch_index: int, params: dict
 ) -> pd.DataFrame:
     """Blends delinquent-borrower rows toward the non-delinquent centroid on the
     configured columns, only while start_batch <= batch_index < end_batch.
@@ -77,11 +77,15 @@ def apply_temporary_concept_drift(
 
 def inject_drift(batch_df: pd.DataFrame, batch_index: int, params: dict) -> pd.DataFrame:
     """Applies persistent drift then temporary concept drift, in that order,
-    for a single batch. Both are governed entirely by params (seed, batch
+    for a single batch. Both are governed entirely by params (batch
     boundaries, shift/scale/blend values) so the exact drift shown to a
     reviewer is always reproducible by re-running with the same config.
+    Neither transform is actually stochastic (both are deterministic
+    mean/shift/scale math), so no seed is threaded through here despite
+    config/drift_params.yaml having one at the top level - that seed exists
+    for other seeded operations in this project (e.g. src/data/split.py's
+    batch shuffling), not for drift injection itself.
     """
-    seed = params["seed"]
     out = apply_persistent_drift(batch_df, batch_index, params)
-    out = apply_temporary_concept_drift(out, batch_index, params, seed)
+    out = apply_temporary_concept_drift(out, batch_index, params)
     return out

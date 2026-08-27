@@ -26,6 +26,35 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Preflight - verify DVC setup is actually complete
+        run: |
+          if [ ! -d .dvc ]; then
+            echo "::error::.dvc/ directory not found in this repo checkout."
+            echo ""
+            echo "This means 'dvc init' was never run and committed, so there is"
+            echo "no DVC remote configured and nothing for 'dvc pull' to pull -"
+            echo "it will fail with a generic 'not inside of a DVC repository'"
+            echo "error that doesn't explain any of this."
+            echo ""
+            echo "One-time local setup required (see README.md 'Getting started'):"
+            echo "  dvc init"
+            echo "  dvc remote add -d origin s3://<your-dagshub-bucket>"
+            echo "  dvc remote modify origin --local access_key_id <dagshub-username>"
+            echo "  dvc remote modify origin --local secret_access_key <dagshub-token>"
+            echo "  dvc add data/processed/pretrain_batches.pkl data/processed/training_pool.pkl data/processed/holdout.pkl data/raw/cs-training.csv"
+            echo "  git add data/processed/*.dvc data/raw/*.dvc .dvc/config"
+            echo "  git commit -m 'Track data with DVC' && git push"
+            echo "  dvc push"
+            exit 1
+          fi
+          if [ -z "${{ secrets.DVC_ACCESS_KEY_ID }}" ] || [ -z "${{ secrets.DVC_SECRET_ACCESS_KEY }}" ]; then
+            echo "::error::DVC_ACCESS_KEY_ID and/or DVC_SECRET_ACCESS_KEY repo secrets are not set."
+            echo "Add them under Settings -> Secrets and variables -> Actions."
+            echo "Values are your DagsHub username and a DagsHub access token."
+            exit 1
+          fi
+          echo "DVC setup looks complete, proceeding to pull."
+
       - name: Pull versioned data
         run: dvc pull
         env:

@@ -23,7 +23,9 @@ def test_cache_reloads_only_when_alias_version_changes():
     orig_loader = model_cache_module.mlflow.sklearn.load_model
     model_cache_module.mlflow.MlflowClient = lambda: fake_client
     load_calls = []
-    model_cache_module.mlflow.sklearn.load_model = lambda uri: load_calls.append(uri) or f"model_for_{uri}"
+    model_cache_module.mlflow.sklearn.load_model = (
+        lambda uri: load_calls.append(uri) or f"model_for_{uri}"
+    )
 
     try:
         model_a, version_a = cache.get()
@@ -52,7 +54,9 @@ def test_cache_reloads_after_alias_version_bumps():
     orig_loader = model_cache_module.mlflow.sklearn.load_model
     model_cache_module.mlflow.MlflowClient = lambda: fake_client
     load_calls = []
-    model_cache_module.mlflow.sklearn.load_model = lambda uri: load_calls.append(uri) or f"model_for_{uri}"
+    model_cache_module.mlflow.sklearn.load_model = (
+        lambda uri: load_calls.append(uri) or f"model_for_{uri}"
+    )
 
     try:
         _, version_a = cache.get()

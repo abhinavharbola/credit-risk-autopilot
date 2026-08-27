@@ -23,7 +23,7 @@ from src.db.repository import (
 )
 from src.drift.detect import check_retrain_trigger
 from src.gate.evaluate import compute_metric, evaluate_gate
-from src.model.features import ALL_COLUMNS, TARGET
+from src.model.features import ALL_COLUMNS, FEATURES, TARGET
 from src.model.train import score as score_model
 from src.model.train import train_challenger
 from src.orchestration.promote import check_rollback, promote_challenger
@@ -51,7 +51,12 @@ def score_batch_with_production(
             "batch_id": batch_id,
             "model_alias": "production",
             "model_version": model_version,
-            "features": row.to_dict(),
+            # FEATURES only, not the full row: batch_df still carries TARGET
+            # at this point (it's the pretrain batch's original column set),
+            # and row.to_dict() would silently store the ground-truth label
+            # into predictions.features at scoring time - before the
+            # delayed-labels window says it should be available at all.
+            "features": row[FEATURES].to_dict(),
             "predicted_prob": float(p),
             "predicted_label": int(p >= 0.5),
         }
@@ -213,7 +218,11 @@ def run_tick(
     write_audit_log(
         conn,
         event_type="drift_check",
-        payload={"batch": current_batch, "retrain_triggered": triggered, "fingerprint": fingerprint},
+        payload={
+            "batch": current_batch,
+            "retrain_triggered": triggered,
+            "fingerprint": fingerprint,
+        },
     )
     result["retrain_triggered"] = triggered
 
@@ -238,7 +247,8 @@ def run_tick(
                 window_metrics = {
                     config["gate"]["primary_metric"]: gate_outcome["gate_result"].challenger_metric
                 }
-                holdout_metrics = window_metrics  # holdout eval wired in when live infra is available
+                # holdout eval wired in when live infra is available
+                holdout_metrics = window_metrics
                 champion_history_id = promote_challenger(
                     conn,
                     gate_outcome["challenger_version"],
