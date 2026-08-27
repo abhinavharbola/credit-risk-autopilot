@@ -1,0 +1,5 @@
+outs:
+- md5: c97b3f15ecd39c157831334813ceb298
+  size: 11328244
+  hash: md5
+  path: pretrain_batches.pkl

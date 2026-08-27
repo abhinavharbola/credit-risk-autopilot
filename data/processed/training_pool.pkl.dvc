@@ -1,0 +1,5 @@
+outs:
+- md5: 4673e8ec66cc72a68a9362a09b0c78f2
+  size: 11221348
+  hash: md5
+  path: training_pool.pkl
