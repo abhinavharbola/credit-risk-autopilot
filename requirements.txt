@@ -35,7 +35,9 @@ logfire==3.1.0
 
 # dashboard
 streamlit==1.40.1
-plotly==6.7.0
+# evidently 0.7.21 requires plotly<6,>=5.10.0 - pinned to the latest 5.x
+# release that satisfies that, not 6.x, which conflicts on install
+plotly==5.24.1
 
 # llm call (challenger explanation)
 groq==0.13.0
