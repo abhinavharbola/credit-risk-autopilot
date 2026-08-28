@@ -26,7 +26,7 @@ from src.model.features import FEATURES, TARGET
 load_dotenv()
 
 MODEL_NAME = "credit-risk-classifier"
-EXPERIMENT_NAME = "credit-risk-governance"
+EXPERIMENT_NAME = "credit-risk-governance-v2"
 
 
 def _ensure_experiment() -> None:
