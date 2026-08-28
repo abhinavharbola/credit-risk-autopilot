@@ -3,7 +3,9 @@
 # concept drift is a fixed-ratio blend toward a computed centroid, so the
 # same config always produces the same output for a given batch. The
 # project's actual seeded randomness (holdout carve, batch shuffling) lives
-# in src/data/split.py, with its own independent seed=42 defaults.persistent_drift:
+# in src/data/split.py, with its own independent seed=42 defaults.
+
+persistent_drift:
   # active from this batch index onward, never turns off
   start_batch: 10
   columns:
