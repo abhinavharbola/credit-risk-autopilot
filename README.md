@@ -1,8 +1,8 @@
 # Continuous Credit Risk Governance Pipeline
 
-A self-governing ML pipeline that simulates a credit risk classifier's full production lifecycle: score a live batch, wait for delayed ground-truth labels, detect distribution drift, retrain a challenger, gate it against the current champion with a real significance test, for promotion or rejection, and roll back if the model in production starts underperforming, all without a human in the loop.
+A self-governing ML pipeline that simulates a credit risk classifier's full production lifecycle: score a live batch, wait for delayed ground-truth labels, detect distribution drift, retrain a challenger, gate it against the current champion with a real significance test, for promotion or rejection, and roll back if the production model starts underperforming.
 
-Built as a portfolio project on entirely free-tier infrastructure: no paid APIs, no GPU, no local database server.
+Built as a portfolio project on entirely free-tier infrastructure: no paid APIs, no GPU, no local database server, to run without a human in loop.
 
 ## Preview
 
