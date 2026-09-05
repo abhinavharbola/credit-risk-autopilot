@@ -11,11 +11,18 @@ from pydantic import BaseModel, Field
 import pandas as pd
 
 from src.model.train import score
+from src.utils.config import load_yaml
 from src.utils.model_cache import AliasedModelCache
 
 MODEL_NAME = "credit-risk-classifier"
 
 _cache = AliasedModelCache(MODEL_NAME, "production")
+
+# Same decision_threshold the gate uses for McNemar/recall/precision
+# (config/gate_config.yaml), not a hardcoded 0.5 - keeps predicted_label
+# here consistent with what governance actually classifies as positive,
+# even if the threshold is ever changed in config.
+_DECISION_THRESHOLD = load_yaml("config/gate_config.yaml")["decision_threshold"]
 
 app = FastAPI(title="Credit Risk Governance - Serving")
 
@@ -83,6 +90,6 @@ def predict(request: PredictionRequest) -> PredictionResponse:
 
     return PredictionResponse(
         predicted_prob=prob,
-        predicted_label=int(prob >= 0.5),
+        predicted_label=int(prob >= _DECISION_THRESHOLD),
         model_version=version,
     )

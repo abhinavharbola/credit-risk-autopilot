@@ -40,16 +40,24 @@ with engine.connect() as conn:
     champion = get_latest_champion(conn)
 
 version_label = f'v{champion["model_version"]}' if champion else "none promoted"
+status_dot_class = "warn" if (champion and champion.get("reference_stale")) else ""
 
 header_html = textwrap.dedent(
     '<div class="crg-appheader">'
+    '<div class="crg-appheader-brand">'
+    '<div class="crg-appheader-mark">CRG</div>'
     '<div>'
     '<div class="crg-appheader-title">Credit Risk Governance</div>'
     '<div class="crg-appheader-subtitle">Autonomous retrain, promote, and rollback '
     "pipeline &middot; recession scenario simulation</div>"
     "</div>"
-    '<div class="crg-status-pill"><span class="crg-status-dot"></span>'
-    f'batch {state["current_batch"]} &middot; production {version_label}</div>'
+    "</div>"
+    '<div class="crg-status-pill">'
+    f'<span class="crg-status-dot {status_dot_class}"></span>'
+    f'<span class="crg-status-pill-item">batch {state["current_batch"]}</span>'
+    '<span class="crg-status-pill-divider"></span>'
+    f'<span class="crg-status-pill-item">production {version_label}</span>'
+    "</div>"
     "</div>"
 ).strip()
 st.markdown(header_html, unsafe_allow_html=True)

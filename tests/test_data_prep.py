@@ -38,11 +38,12 @@ def make_synthetic_df(n=1000, seed=0):
 
 def test_carve_holdout_disjoint_and_covers_all_rows():
     df = make_synthetic_df()
+    df["_row_id"] = range(len(df))
     train_pool, holdout = carve_holdout(df, holdout_frac=0.15, seed=1)
 
     assert len(train_pool) + len(holdout) == len(df)
-    # no row value duplicated across the two splits (uses age+index proxy via count)
-    assert set(train_pool.index).isdisjoint(set(holdout.index)) or True  # indices reset
+    # every original row lands in exactly one split, none dropped or duplicated
+    assert set(train_pool["_row_id"]).isdisjoint(set(holdout["_row_id"]))
     assert len(holdout) > 0
     assert len(train_pool) > 0
 

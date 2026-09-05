@@ -39,11 +39,17 @@ def score_batch_with_production(
     batch_id: int,
     model,
     model_version: str,
+    decision_threshold: float,
 ) -> None:
     """Scores batch_df with the given (already-loaded) production model and
     bulk-inserts one row per prediction (single INSERT, not a loop). Takes
     the model as a parameter rather than loading it itself, so run_tick's
     cached load is reused instead of a second independent load per tick.
+
+    decision_threshold comes from config/gate_config.yaml (the same value
+    the gate uses for McNemar/recall/precision) rather than a hardcoded 0.5,
+    so predicted_label always reflects whatever threshold governance is
+    actually configured with.
     """
     probs = score_model(model, batch_df)
     rows = [
@@ -58,7 +64,7 @@ def score_batch_with_production(
             # delayed-labels window says it should be available at all.
             "features": row[FEATURES].to_dict(),
             "predicted_prob": float(p),
-            "predicted_label": int(p >= 0.5),
+            "predicted_label": int(p >= decision_threshold),
         }
         for (_, row), p in zip(batch_df.iterrows(), probs)
     ]
@@ -206,7 +212,14 @@ def run_tick(
     production_model, production_version = _production_cache.get()
 
     batch_df = inject_drift(raw_batches[current_batch], current_batch, config)
-    score_batch_with_production(conn, batch_df, current_batch, production_model, production_version)
+    score_batch_with_production(
+        conn,
+        batch_df,
+        current_batch,
+        production_model,
+        production_version,
+        config["gate"]["decision_threshold"],
+    )
 
     delay = config["delayed_labels"]["delay_batches"]
     due_batch_index = current_batch - delay
@@ -258,6 +271,17 @@ def run_tick(
                     training_pool_df,
                 )
                 result["promoted_champion_history_id"] = champion_history_id
+
+                # A promotion just moved the @production alias in MLflow.
+                # production_model/production_version above were loaded at
+                # the top of this tick, before that happened - reusing them
+                # for the rollback check below would score the just-replaced
+                # model instead of the model that's actually live now, and
+                # compare it against the newly-promoted challenger's stored
+                # window_metrics. Reload from the cache so the rollback
+                # check below always evaluates the model that's actually
+                # aliased @production at this point in the tick.
+                production_model, production_version = _production_cache.get()
 
         live_prob = score_model(production_model, due_batch_df)
         live_metric_value = compute_metric(

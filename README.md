@@ -140,7 +140,8 @@ credit-risk-autopilot/
 │
 ├── .streamlit/config.toml
 ├── .gitignore
-├── pyproject.toml
+├── pytest.ini
+├── ruff.toml
 ├── requirements.txt
 ├── .env.example
 └── README.md
@@ -153,7 +154,6 @@ credit-risk-autopilot/
 - [Neon](https://neon.tech) for Postgres.
 - [DagsHub](https://dagshub.com) for MLflow tracking/registry and a DVC-compatible remote.
 - [Kaggle](https://www.kaggle.com) for the dataset (competition, not a plain dataset, see below).
-- [Groq](https://console.groq.com) (optional, for the single decision-explanation call).
 
 ### 2. Install
 
@@ -190,7 +190,7 @@ dvc remote modify origin --local secret_access_key <dagshub-token>
 
 Notes that cost real debugging time to learn:
 - **Same token for both fields.** `access_key_id` and `secret_access_key` are the same DagsHub token, not a username/token pair.
-- **`dvc remote default origin` is required even after `-d`.** The `-d` flag on `add` doesn't reliably persist as the default on its own.
+- **Run `dvc remote default origin` even though `-d` on `add` is supposed to set the default already.** DVC's own docs say `-d`/`--default` on `remote add` is sufficient by itself, and it may well be fine for you. This extra line is cheap insurance in case it isn't - it's idempotent, so running it costs nothing either way.
 - **Use a token from Settings then Tokens, not the Remote dropdown's session token.** The token DagsHub shows inline in the Remote setup page can be a short-lived session token. A token generated from your DagsHub account's Settings then Tokens page is long-lived and won't expire out from under a scheduled job.
 
 Then track and push the data:
@@ -221,13 +221,12 @@ dvc status -c   # should report nothing pending against the remote
 | `MLFLOW_TRACKING_PASSWORD` | A DagsHub access token | From Settings then Tokens, same long-lived-token guidance as above. |
 | `DVC_ACCESS_KEY_ID` | Your DagsHub token | Same token you used for the local DVC remote setup. |
 | `DVC_SECRET_ACCESS_KEY` | Your DagsHub token | Same token, both fields. |
-| `LOGFIRE_TOKEN` | (optional) | Tracing no-ops without it. |
 
 Two things specific to how the workflow uses these that are worth knowing if you ever edit it:
 - `dvc pull` in CI needs credentials exposed as `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`, not `DVC_ACCESS_KEY_ID` / `DVC_SECRET_ACCESS_KEY`. `dvc-s3` is boto3 under the hood, and boto3's environment-variable credential fallback only recognizes the standard AWS names. The repo secrets keep the `DVC_*` names for clarity in the GitHub UI; the workflow maps them to the AWS names internally when invoking `dvc pull`.
 - The workflow has a preflight step that checks `.dvc/` exists and both DVC secrets are non-empty before attempting `dvc pull`, failing with a plain-English message and the setup commands above instead of DVC's generic "not inside of a DVC repository" error.
 
-Once all seven secrets are set, trigger the workflow manually first (Actions then Advance pipeline clock then Run workflow) rather than waiting for the schedule, so you get fast feedback if anything's misconfigured. Verified running successfully end to end on a real schedule as of this writing.
+Once all six secrets are set, trigger the workflow manually first (Actions then Advance pipeline clock then Run workflow) rather than waiting for the schedule, so you get fast feedback if anything's misconfigured. Verified running successfully end to end on a real schedule as of this writing.
 
 ## Running it
 
@@ -259,3 +258,7 @@ ruff check src tests scripts dashboard
 - **The Evidently schema match is verified against one live capture (0.7.21)**, not guaranteed stable across versions.
 - **Rollback rarely has anywhere to revert to in a short run.** With only one or two promotions in a 25-batch demo, most rollback triggers find no valid prior champion and correctly do nothing beyond flagging. The underlying mechanism is exercised and tested (`find_previous_champion`, N-hop selection, staleness suppression), but a longer run with more promotions would exercise an actual reversion more directly.
 - **Model quality is not the point.** The challenger is a plain logistic regression on purpose; the governance loop around it, not the model itself, is the deliverable.
+
+
+
+================================================
