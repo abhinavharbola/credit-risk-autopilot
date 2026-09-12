@@ -15,6 +15,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.db.connection import get_connection
 from src.orchestration.clock import claim_and_run_tick
 from src.utils.config import load_yaml
+from src.utils.logging import configure_logging
+
+configure_logging()
 
 RAW_BATCHES_PATH = Path("data/processed/pretrain_batches.pkl")
 TRAINING_POOL_PATH = Path("data/processed/training_pool.pkl")
@@ -54,3 +57,6 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+
+
+

@@ -26,7 +26,7 @@ from src.model.features import FEATURES, TARGET
 load_dotenv()
 
 MODEL_NAME = "credit-risk-classifier"
-EXPERIMENT_NAME = "credit-risk-governance-v3"
+EXPERIMENT_NAME = "credit-risk-governance-v2"
 
 
 def _ensure_experiment() -> None:
@@ -82,3 +82,6 @@ def train_challenger(train_df: pd.DataFrame, run_name: str) -> tuple[str, str, P
 def score(model: Pipeline, df: pd.DataFrame) -> np.ndarray:
     """Predicted probability of SeriousDlqin2yrs == 1."""
     return model.predict_proba(df[FEATURES])[:, 1]
+
+
+

@@ -12,7 +12,10 @@ import pandas as pd
 
 from src.model.train import score
 from src.utils.config import load_yaml
+from src.utils.logging import configure_logging, span
 from src.utils.model_cache import AliasedModelCache
+
+configure_logging()
 
 MODEL_NAME = "credit-risk-classifier"
 
@@ -84,12 +87,15 @@ def predict(request: PredictionRequest) -> PredictionResponse:
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e)) from e
 
-    row = request.model_dump(by_alias=True)
-    df = pd.DataFrame([row])
-    prob = float(score(model, df)[0])
+    with span("predict", model_version=version):
+        row = request.model_dump(by_alias=True)
+        df = pd.DataFrame([row])
+        prob = float(score(model, df)[0])
 
     return PredictionResponse(
         predicted_prob=prob,
         predicted_label=int(prob >= _DECISION_THRESHOLD),
         model_version=version,
     )
+
+

@@ -122,3 +122,6 @@ def test_single_column_noise_does_not_trigger_at_the_raised_threshold():
 def test_reduce_to_fingerprint_handles_missing_metrics_key_gracefully():
     fingerprint = _reduce_to_fingerprint({})
     assert fingerprint == {"drift_share": None, "column_drift_scores": {}}
+
+
+

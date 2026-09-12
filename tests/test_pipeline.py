@@ -231,3 +231,6 @@ def test_retrain_and_gate_can_actually_promote_when_pools_differ():
 
     assert outcome["gate_result"].promote is True
     assert outcome["gate_result"].champion_metric != outcome["gate_result"].challenger_metric
+
+
+

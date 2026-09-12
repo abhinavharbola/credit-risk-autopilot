@@ -59,3 +59,6 @@ CREATE INDEX IF NOT EXISTS idx_audit_log_created ON audit_log (created_at);
 INSERT INTO pipeline_state (id, current_batch, version)
 VALUES (1, 0, 0)
 ON CONFLICT (id) DO NOTHING;
+
+
+

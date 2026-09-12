@@ -95,3 +95,5 @@ def render(engine) -> None:
         f'<div class="crg-timeline">{"".join(items_html)}</div>'
     ).strip()
     st.markdown(full_html, unsafe_allow_html=True)
+
+

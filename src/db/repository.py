@@ -57,28 +57,37 @@ def release_labels_bulk(
     conn: Connection, batch_id: int, id_to_label: dict[int, int]
 ) -> None:
     """Bulk-updates true_label for a whole batch's worth of predictions in a
-    single UPDATE ... FROM VALUES, then writes ONE audit_log event describing
-    the release (per-row updates are not individually logged, the release
-    itself is the auditable event per schema note 6a).
+    single UPDATE ... FROM unnest(...), then writes ONE audit_log event
+    describing the release (per-row updates are not individually logged,
+    the release itself is the auditable event per schema note 6a).
+
+    ids/labels are passed as bound array parameters (unnest'd server-side),
+    not interpolated into the SQL text. An earlier version built the VALUES
+    list via an f-string, safe in practice only because both fields were
+    cast through int() first - correct, but fragile, and inconsistent with
+    every other query in this file. This version stays a single statement
+    (4.7: never a Python loop of N round trips) with no manual escaping.
     """
     if not id_to_label:
         return
 
-    # ids/labels are cast to int before interpolation: this VALUES list can't be
-    # parameterized as a bind list in plain SQLAlchemy text(), so we don't trust
-    # them as raw strings even though they originate from our own pipeline.
-    values_clause = ", ".join(
-        f"({int(pid)}, {int(label)})" for pid, label in id_to_label.items()
-    )
+    ids = list(id_to_label.keys())
+    labels = list(id_to_label.values())
+
     conn.execute(
         text(
-            f"""
+            """
             UPDATE predictions AS p
             SET true_label = v.label, label_released_at = now()
-            FROM (VALUES {values_clause}) AS v(id, label)
+            FROM (
+                SELECT * FROM unnest(
+                    CAST(:ids AS bigint[]), CAST(:labels AS integer[])
+                ) AS v(id, label)
+            ) AS v
             WHERE p.id = v.id
             """
-        )
+        ),
+        {"ids": ids, "labels": labels},
     )
 
     write_audit_log(
@@ -112,11 +121,22 @@ def get_labeled_predictions(
 def get_predictions_for_batch(
     conn: Connection, batch_id: int, model_alias: str | None = None
 ) -> list[dict[str, Any]]:
+    """ORDER BY id matters here, not just cosmetic: release_due_labels
+    (src/orchestration/pipeline.py) zips these rows against a dataframe by
+    position, assuming row N here corresponds to row N of the batch that was
+    scored. Postgres does not guarantee result order for a plain SELECT
+    without ORDER BY - an index scan, a parallel scan, or table bloat could
+    all return rows out of insertion order with no error, silently
+    attaching a label to the wrong prediction. Ordering by id (assigned in
+    insertion order within insert_predictions_bulk's single statement)
+    reproduces the guarantee the caller actually needs.
+    """
     query = "SELECT * FROM predictions WHERE batch_id = :batch_id"
     params: dict[str, Any] = {"batch_id": batch_id}
     if model_alias is not None:
         query += " AND model_alias = :model_alias"
         params["model_alias"] = model_alias
+    query += " ORDER BY id"
     result = conn.execute(text(query), params)
     return [dict(row._mapping) for row in result]
 
@@ -227,3 +247,6 @@ def advance_pipeline_state(conn: Connection, expected_version: int) -> bool:
     )
     row = result.first()
     return row is not None
+
+
+

@@ -108,3 +108,5 @@ def test_build_pretrain_batches_fixed_size_and_reproducible():
     assert all(len(b) == 50 for b in batches_a)
     for a, b in zip(batches_a, batches_b):
         pd.testing.assert_frame_equal(a, b)
+
+

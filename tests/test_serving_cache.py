@@ -89,3 +89,6 @@ def test_cache_raises_runtime_error_when_no_alias_set():
             assert "no model is currently aliased" in str(e)
     finally:
         model_cache_module.mlflow.MlflowClient = orig_client_cls
+
+
+

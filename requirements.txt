@@ -37,6 +37,12 @@ streamlit==1.40.1
 # release that satisfies that, not 6.x, which conflicts on install
 plotly==5.24.1
 
+# LLM (single isolated decision-explanation call, src/llm/explain.py)
+groq==0.11.0
+
+# tracing (src/utils/logging.py)
+logfire==2.6.1
+
 # testing / lint
 pytest==8.3.3
 ruff==0.7.4
@@ -44,3 +50,5 @@ ruff==0.7.4
 # env
 python-dotenv==1.0.1
 pyyaml==6.0.2
+
+

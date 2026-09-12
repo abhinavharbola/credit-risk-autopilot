@@ -258,3 +258,5 @@ ruff check src tests scripts dashboard
 - **The Evidently schema match is verified against one live capture (0.7.21)**, not guaranteed stable across versions.
 - **Rollback rarely has anywhere to revert to in a short run.** With only one or two promotions in a 25-batch demo, most rollback triggers find no valid prior champion and correctly do nothing beyond flagging. The underlying mechanism is exercised and tested (`find_previous_champion`, N-hop selection, staleness suppression), but a longer run with more promotions would exercise an actual reversion more directly.
 - **Model quality is not the point.** The challenger is a plain logistic regression on purpose; the governance loop around it, not the model itself, is the deliverable.
+
+

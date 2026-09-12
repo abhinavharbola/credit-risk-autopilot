@@ -61,3 +61,6 @@ def test_fingerprint_staleness_handles_no_shared_columns():
     now = {"drift_share": 0.11, "column_drift_scores": {"MonthlyIncome": 0.9}}
     # no shared columns to compare, falls back to drift_share only, which is within threshold
     assert check_fingerprint_staleness(then, now, threshold=0.1) is False
+
+
+

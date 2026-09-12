@@ -7,19 +7,16 @@ configured batch onward, and it never turns off.
 Temporary concept drift: blend delinquent-borrower rows toward the
 non-delinquent centroid, active only within a fixed batch window, then reverts.
 
-Both are seeded per-batch (seed, batch_index) so any batch's drift is
-independently reproducible regardless of call order, and parameters are read
-from config/drift_params.yaml, never hardcoded here.
+Both are deterministic (fixed shift/scale/blend math, no randomness), so any
+batch's drift is independently reproducible regardless of call order given
+the same (batch_index, params) - see inject_drift's docstring below for why
+no seed is threaded through this module. Parameters are read from
+config/drift_params.yaml, never hardcoded here.
 """
 
-import numpy as np
 import pandas as pd
 
 from src.model.features import TARGET
-
-
-def _batch_rng(seed: int, batch_index: int) -> np.random.Generator:
-    return np.random.default_rng(seed + batch_index)
 
 
 def apply_persistent_drift(
@@ -89,3 +86,6 @@ def inject_drift(batch_df: pd.DataFrame, batch_index: int, params: dict) -> pd.D
     out = apply_persistent_drift(batch_df, batch_index, params)
     out = apply_temporary_concept_drift(out, batch_index, params)
     return out
+
+
+

@@ -139,3 +139,6 @@ def check_fingerprint_staleness(
 
     max_col_delta = max(abs(scores_now[c] - scores_then[c]) for c in shared_cols)
     return max_col_delta > threshold
+
+
+

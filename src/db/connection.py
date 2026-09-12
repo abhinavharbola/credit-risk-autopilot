@@ -49,3 +49,6 @@ def run_migrations(schema_path: str = "src/db/schema.sql") -> None:
             statement = statement.strip()
             if statement:
                 conn.exec_driver_sql(statement)
+
+
+

@@ -52,21 +52,30 @@ def score_batch_with_production(
     actually configured with.
     """
     probs = score_model(model, batch_df)
+    # FEATURES only, not the full row: batch_df still carries TARGET at this
+    # point (it's the pretrain batch's original column set), and a full-row
+    # dict would silently store the ground-truth label into
+    # predictions.features at scoring time - before the delayed-labels
+    # window says it should be available at all.
+    #
+    # to_dict(orient="records") is column-driven, so it preserves each
+    # column's own dtype per record (age stays an int, DebtRatio stays a
+    # float). An earlier version built this from batch_df.iterrows(), which
+    # is row-driven: pandas has to give every row a single dtype, so a
+    # mixed int/float batch got silently upcast to all-float per row -
+    # integer features like age or delinquency counts were stored as floats
+    # in predictions.features with no error or warning.
+    feature_records = batch_df[FEATURES].to_dict(orient="records")
     rows = [
         {
             "batch_id": batch_id,
             "model_alias": "production",
             "model_version": model_version,
-            # FEATURES only, not the full row: batch_df still carries TARGET
-            # at this point (it's the pretrain batch's original column set),
-            # and row.to_dict() would silently store the ground-truth label
-            # into predictions.features at scoring time - before the
-            # delayed-labels window says it should be available at all.
-            "features": row[FEATURES].to_dict(),
+            "features": features,
             "predicted_prob": float(p),
             "predicted_label": int(p >= decision_threshold),
         }
-        for (_, row), p in zip(batch_df.iterrows(), probs)
+        for features, p in zip(feature_records, probs)
     ]
     insert_predictions_bulk(conn, rows)
 
@@ -307,3 +316,5 @@ def run_tick(
         result["rollback"] = rollback_result
 
     return result
+
+
