@@ -44,6 +44,9 @@ from src.model.features import TARGET
 from src.model.train import score, train_challenger
 from src.orchestration.clock import claim_and_run_tick
 from src.utils.config import load_yaml
+from src.utils.logging import configure_logging
+
+configure_logging()
 
 PROCESSED_DIR = Path("data/processed")
 BATCH_SIZE = 200
@@ -84,7 +87,7 @@ def prepare_data() -> tuple[list, pd.DataFrame, pd.DataFrame]:
     return batches, train_pool, holdout
 
 
-def bootstrap_champion(train_pool_df, holdout_df) -> None:
+def bootstrap_champion(train_pool_df, holdout_df, gate_config: dict) -> None:
     """Trains and promotes the very first model directly - there's no prior
     champion to gate against yet, so the three-gate logic doesn't apply here.
     """
@@ -94,8 +97,18 @@ def bootstrap_champion(train_pool_df, holdout_df) -> None:
     client = mlflow.MlflowClient()
     client.set_registered_model_alias(MODEL_NAME, "production", version)
 
+    # decision_threshold from gate_config, not hardcoded: primary_metric is
+    # auc_pr here so the threshold is actually a no-op today, but hardcoding
+    # 0.5 duplicated a value every other call site in this project reads
+    # from config, and would silently disagree with it the moment either
+    # the config value or the primary_metric changed.
     holdout_prob = score(model, holdout_df)
-    holdout_metric = compute_metric(holdout_df[TARGET].to_numpy(), holdout_prob, "auc_pr", 0.5)
+    holdout_metric = compute_metric(
+        holdout_df[TARGET].to_numpy(),
+        holdout_prob,
+        "auc_pr",
+        gate_config["decision_threshold"],
+    )
 
     # Real fingerprint (holdout vs training pool - both drawn from the same
     # underlying distribution), not a hardcoded zero. A fake zero baseline
@@ -129,11 +142,7 @@ def bootstrap_champion(train_pool_df, holdout_df) -> None:
     print(f"bootstrap champion promoted: version {version}, holdout AUC-PR {holdout_metric:.4f}")
 
 
-def run_ticks(batches, train_pool_df, n_ticks: int) -> list[dict]:
-    drift_params = load_yaml("config/drift_params.yaml")
-    gate_config = load_yaml("config/gate_config.yaml")
-    config = {**drift_params, "gate": gate_config}
-
+def run_ticks(batches, train_pool_df, config: dict, n_ticks: int) -> list[dict]:
     summary = []
     for i in range(n_ticks):
         with get_connection() as conn:
@@ -154,14 +163,17 @@ def run_ticks(batches, train_pool_df, n_ticks: int) -> list[dict]:
 def print_summary(summary: list[dict]) -> None:
     n_retrain_triggers = sum(1 for r in summary if r.get("retrain_triggered"))
     n_promotions = sum(1 for r in summary if r.get("promoted_champion_history_id"))
-    n_rollbacks = sum(1 for r in summary if r.get("rollback", {}).get("rollback_triggered"))
+    n_rollback_flags = sum(1 for r in summary if r.get("rollback", {}).get("rollback_triggered"))
+    n_rollbacks = sum(1 for r in summary if r.get("rollback", {}).get("rollback_executed"))
     n_stale_flags = sum(1 for r in summary if r.get("rollback", {}).get("reference_stale"))
+    n_rollback_flags_only = n_rollback_flags - n_rollbacks
 
     print("\n=== demo loop summary ===")
     print(f"ticks run: {len(summary)}")
     print(f"retrain triggers: {n_retrain_triggers}")
     print(f"promotions: {n_promotions}")
     print(f"rollbacks: {n_rollbacks}")
+    print(f"rollback flags with no valid prior champion yet: {n_rollback_flags_only}")
     print(f"reference-stale flags (rollback checks suppressed): {n_stale_flags}")
 
 
@@ -169,12 +181,19 @@ def main() -> int:
     print("applying DB schema...")
     run_migrations()
 
+    drift_params = load_yaml("config/drift_params.yaml")
+    gate_config = load_yaml("config/gate_config.yaml")
+    config = {**drift_params, "gate": gate_config}
+
     batches, train_pool_df, holdout_df = prepare_data()
-    bootstrap_champion(train_pool_df, holdout_df)
-    summary = run_ticks(batches, train_pool_df, n_ticks=N_TICKS)
+    bootstrap_champion(train_pool_df, holdout_df, gate_config)
+    summary = run_ticks(batches, train_pool_df, config, n_ticks=N_TICKS)
     print_summary(summary)
     return 0
 
 
 if __name__ == "__main__":
     sys.exit(main())
+
+
+

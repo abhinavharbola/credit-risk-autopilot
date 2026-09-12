@@ -119,10 +119,24 @@ def check_rollback(
          (optimistic) bound to still fall below the drop threshold, not
          just the single point estimate - the same rigor the promotion
          gate already applies via McNemar/bootstrap on the other side.
+
+    rollback_triggered vs rollback_executed: rollback_triggered means step 3's
+    statistical test says the champion has genuinely degraded. It says nothing
+    about whether there's anywhere to revert to. rollback_executed is only
+    True once a valid prior champion was actually found and the production
+    alias was actually swapped. A run with only one promotion so far will
+    correctly show rollback_triggered=True, rollback_executed=False the first
+    time a real drop occurs - that's the check working, not failing. Callers
+    that want a count of actual reversions (not just flagged degradations)
+    must use rollback_executed, not rollback_triggered.
     """
     current = get_latest_champion(conn)
     if current is None:
-        return {"rollback_triggered": False, "reason": "no champion on record"}
+        return {
+            "rollback_triggered": False,
+            "rollback_executed": False,
+            "reason": "no champion on record",
+        }
 
     live_fingerprint = compute_fingerprint(live_batch_df, training_pool_df)
     is_stale = check_fingerprint_staleness(
@@ -145,7 +159,7 @@ def check_rollback(
                 ),
             },
         )
-        return {"rollback_triggered": False, "reference_stale": True}
+        return {"rollback_triggered": False, "rollback_executed": False, "reference_stale": True}
 
     mark_reference_stale(conn, current["id"], stale=False)
 
@@ -188,10 +202,12 @@ def check_rollback(
         },
     )
 
+    rollback_executed = False
     if rollback_triggered:
         history = get_champion_history(conn)
         previous = find_previous_champion(history, current["id"])
         if previous is not None:
+            rollback_executed = True
             client = mlflow.MlflowClient()
             client.set_registered_model_alias(
                 MODEL_NAME, "production", previous["model_version"]
@@ -207,4 +223,12 @@ def check_rollback(
                 },
             )
 
-    return {"rollback_triggered": rollback_triggered, "reference_stale": False, "drop": drop}
+    return {
+        "rollback_triggered": rollback_triggered,
+        "rollback_executed": rollback_executed,
+        "reference_stale": False,
+        "drop": drop,
+    }
+
+
+

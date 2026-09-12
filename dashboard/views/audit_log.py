@@ -11,6 +11,7 @@ import textwrap
 import streamlit as st
 
 from src.db.repository import get_audit_log
+from src.llm.explain import explain_event
 
 EVENT_TYPES = [
     "all",
@@ -38,7 +39,14 @@ def _summarize(event_type: str, payload: dict) -> str:
     if event_type == "rollback_check":
         if payload.get("reference_stale"):
             return "reference stale, rollback check suppressed"
-        return "rollback triggered" if payload.get("rollback_triggered") else "no rollback needed"
+        # rollback_triggered here only means "degradation flagged", not
+        # "reverted": this row's own payload never records whether a
+        # valid prior champion existed to revert to. When one did, a
+        # separate "rollback" event (above) is the actual reversion
+        # record - look for it right next to this one.
+        if payload.get("rollback_triggered"):
+            return "degradation flagged, see nearby rollback event for outcome"
+        return "no rollback needed"
     if event_type == "drift_check":
         fingerprint = payload.get("fingerprint", {})
         share = fingerprint.get("drift_share")
@@ -77,3 +85,9 @@ def render(engine) -> None:
         st.markdown(row_html, unsafe_allow_html=True)
         with st.expander("Full payload"):
             st.json(e["event_payload"])
+            if st.button("Explain in plain language", key=f"explain-{e['id']}"):
+                with st.spinner("Asking the LLM..."):
+                    st.write(explain_event(e["event_type"], e["event_payload"]))
+
+
+
