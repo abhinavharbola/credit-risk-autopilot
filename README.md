@@ -7,18 +7,12 @@ Built as a portfolio project on entirely free-tier infrastructure: no paid APIs,
 ## Preview
 
 <p align="center">
-  <img src="images/main_ui.png" width="720" alt="Streamlit dashboard overview showing current batch, production model version, promotion/rollback counts, and an audit_log event-type bar chart">
+  <img src="assets/ui.png" width="720" alt="Line chart of drift share per batch with retrain-triggered batches called out, plus a raw drift-check table">
   <br>
-  <sub>Main UI: Overview of the pipeline with current champion, batches, versions and rollbacks</sub>
+  <sub>Drift tab: per-batch drift share against the training reference.</sub>
 </p>
 
-<p align="center">
-  <img src="images/drift_ui.png" width="720" alt="Line chart of drift share per batch with retrain-triggered batches called out, plus a raw drift-check table">
-  <br>
-  <sub>Drift tab: per-batch drift share against the training reference</sub>
-</p>
-
-> Additional screenshots for other tabs are in [`images/`](images/).
+> Additional screenshots in [`assets/`](assets/), one per dashboard tab.
 
 ## What this is
 
