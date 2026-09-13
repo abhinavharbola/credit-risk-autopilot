@@ -16,15 +16,26 @@ from src.utils.config import load_yaml
 RETRAIN_THRESHOLD = load_yaml("config/gate_config.yaml")["retrain_drift_share_threshold"]
 
 
-def _stat_strip(items: list[tuple[str, str]]) -> None:
+def _metric_block(items: list[tuple[str, str]]) -> None:
     cells = "".join(
-        '<div class="crg-stat-strip-item">'
-        f'<div class="crg-stat-strip-label">{label}</div>'
-        f'<div class="crg-stat-strip-value">{value}</div>'
+        '<div class="crg-metric-cell">'
+        f'<div class="crg-metric-cell-label">{label}</div>'
+        f'<div class="crg-metric-cell-value">{value}</div>'
         "</div>"
         for label, value in items
     )
-    st.markdown(f'<div class="crg-stat-strip">{cells}</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="crg-metric-block">{cells}</div>', unsafe_allow_html=True)
+
+
+def _section_header(title: str, meta: str = "") -> None:
+    meta_html = f'<span class="crg-section-meta">{meta}</span>' if meta else ""
+    st.markdown(
+        '<div class="crg-section-header">'
+        f'<span class="crg-section-title">{title}</span>'
+        f"{meta_html}"
+        "</div>",
+        unsafe_allow_html=True,
+    )
 
 
 def render(engine) -> None:
@@ -67,7 +78,7 @@ def render(engine) -> None:
     ).strip()
     st.markdown(header_html, unsafe_allow_html=True)
 
-    _stat_strip(
+    _metric_block(
         [
             ("Batches checked", str(len(df))),
             ("Current drift share", f"{latest_share:.3f}" if latest_share is not None else "—"),
@@ -83,9 +94,7 @@ def render(engine) -> None:
             y=df["drift_share"],
             mode="lines",
             name="drift share",
-            line=dict(color="#14515E", width=2.5),
-            fill="tozeroy",
-            fillcolor="rgba(20, 81, 94, 0.08)",
+            line=dict(color="#2A5A62", width=2),
         )
     )
     fig.add_trace(
@@ -94,25 +103,27 @@ def render(engine) -> None:
             y=triggered_df["drift_share"],
             mode="markers",
             name="retrain triggered",
-            marker=dict(color="#9A2E2E", size=9, line=dict(color="#FFFFFF", width=1.5)),
+            marker=dict(color="#9C3B33", size=8, line=dict(color="#FFFFFF", width=1.5)),
         )
     )
     fig.add_hline(
         y=RETRAIN_THRESHOLD,
         line_dash="dash",
-        line_color="#8992A1",
-        annotation_text=f"retrain threshold ({RETRAIN_THRESHOLD})",
+        line_width=1,
+        line_color="#8F949C",
+        annotation_text=f"threshold ({RETRAIN_THRESHOLD})",
+        annotation_position="top left",
         annotation_font_size=11,
-        annotation_font_color="#8992A1",
+        annotation_font_color="#8F949C",
     )
     fig.update_layout(
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
-        font=dict(family="IBM Plex Sans, sans-serif", color="#3D4351", size=12),
+        font=dict(family="IBM Plex Sans, sans-serif", color="#454B56", size=12),
         margin=dict(l=10, r=10, t=10, b=10),
-        height=340,
+        height=320,
         xaxis=dict(title="batch", showgrid=False),
-        yaxis=dict(title="drift share", showgrid=True, gridcolor="#EEF0F3", zeroline=False),
+        yaxis=dict(title="drift share", showgrid=True, gridcolor="#EEF0F2", zeroline=False),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         hovermode="x unified",
     )
@@ -123,5 +134,5 @@ def render(engine) -> None:
         st.caption(f"Retrain triggered at batches: {', '.join(map(str, triggered_batches))}")
 
     st.markdown('<div class="crg-divider"></div>', unsafe_allow_html=True)
-    st.markdown('<div class="crg-section-title">Raw drift checks</div>', unsafe_allow_html=True)
+    _section_header("Raw drift checks")
     st.dataframe(df, use_container_width=True, hide_index=True)

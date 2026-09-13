@@ -4,24 +4,38 @@ list is glanceable; the full JSON payload is one click away, not the
 default view. This is the view that proves the audit trail is real -
 gate rejections and rollback checks show up here just as clearly as
 promotions, not just in a database table nobody looks at.
+
+Rather than dumping every recorded event on load, the log opens on a small
+"Recent" slice with quick-view chips (Promotions, Rollbacks, ...) and a
+separate range chip (Last 10 / 25 / 50 / All) - the statement-view pattern
+banking apps use, so the common case ("did anything get promoted lately")
+doesn't require scrolling past hundreds of drift_check/label_release rows
+first.
 """
 
 import textwrap
+from typing import Callable
 
 import streamlit as st
 
 from src.db.repository import get_audit_log
 from src.llm.explain import explain_event
 
-EVENT_TYPES = [
-    "all",
-    "gate_evaluation",
-    "promotion",
-    "rollback",
-    "rollback_check",
-    "drift_check",
-    "label_release",
-]
+# label -> (event_type to query for, optional predicate over event_payload
+# to narrow further). Rejections and promotions are both gate_evaluation
+# rows distinguished only by payload["promote"], so a plain event_type
+# filter can't separate them on its own.
+QUICK_VIEWS: dict[str, tuple[str | None, Callable[[dict], bool] | None]] = {
+    "Recent": (None, None),
+    "Promotions": ("promotion", None),
+    "Rollbacks": ("rollback", None),
+    "Rejected challengers": ("gate_evaluation", lambda p: not p.get("promote")),
+    "Drift checks": ("drift_check", None),
+    "Label releases": ("label_release", None),
+    "All": (None, None),
+}
+
+RANGE_OPTIONS = {"Last 10": 10, "Last 25": 25, "Last 50": 50, "Last 100": 100, "All": 5000}
 
 
 def _summarize(event_type: str, payload: dict) -> str:
@@ -61,14 +75,27 @@ def _summarize(event_type: str, payload: dict) -> str:
 
 
 def render(engine) -> None:
-    selected = st.selectbox("Event type", EVENT_TYPES, label_visibility="collapsed")
-    event_type = None if selected == "all" else selected
+    col_view, col_range = st.columns([3, 2])
+    with col_view:
+        view = st.radio("Quick view", list(QUICK_VIEWS), horizontal=True, label_visibility="collapsed")
+    with col_range:
+        range_label = st.radio(
+            "Range", list(RANGE_OPTIONS), horizontal=True, label_visibility="collapsed", index=1
+        )
+
+    event_type, predicate = QUICK_VIEWS[view]
+    limit = RANGE_OPTIONS[range_label]
 
     with engine.connect() as conn:
-        events = get_audit_log(conn, event_type=event_type, limit=500)
+        events = get_audit_log(conn, event_type=event_type, limit=limit)
+
+    if predicate is not None:
+        events = [e for e in events if predicate(e["event_payload"])]
+
+    st.markdown('<div style="height:4px;"></div>', unsafe_allow_html=True)
 
     if not events:
-        st.info("No matching audit_log entries.")
+        st.info("No matching audit_log entries for this view.")
         return
 
     for e in events:

@@ -2,6 +2,12 @@
 actually describe governance health (challenger win rate, rollback rate),
 how champion quality has moved across promotions, a breakdown of how gate
 evaluations resolve, and recent audit_log activity.
+
+Color is used only where it encodes a real state: the win-rate and
+rollback-rate KPI values, and the reference-fresh/stale badge. Everything
+else (batch, version, metric figures) stays neutral ink - a dashboard where
+every card is a different color stops actually communicating anything with
+color.
 """
 
 import textwrap
@@ -11,61 +17,68 @@ import streamlit as st
 
 from src.db.repository import get_audit_log, get_champion_history, get_latest_champion, get_pipeline_state
 
-EVENT_COLORS = {
-    "drift_check": "#35607A",
-    "gate_evaluation": "#6B4C7A",
-    "promotion": "#15633F",
-    "rollback": "#9A2E2E",
-    "rollback_check": "#8A5A0B",
-    "label_release": "#8992A1",
+EVENT_COLORS_HEX = {
+    "drift_check": "#6E7B8C",
+    "gate_evaluation": "#6B5B7A",
+    "promotion": "#2E6B45",
+    "rollback": "#9C3B33",
+    "rollback_check": "#8A6412",
+    "label_release": "#B0B5BC",
 }
 
-ACCENT_COLORS = {
-    "brand": "#14515E",
-    "success": "#15633F",
-    "warning": "#8A5A0B",
-    "danger": "#9A2E2E",
+# Known primary_metric keys get a proper display label; anything else falls
+# back to a readable title-case rather than str.capitalize()'s "Auc pr".
+METRIC_LABELS = {
+    "auc_pr": "AUC-PR",
+    "recall_at_threshold": "Recall",
+    "precision_at_threshold": "Precision",
 }
 
 
-def _kpi_card(label: str, value: str, caption: str, accent: str = "brand") -> None:
-    color = ACCENT_COLORS.get(accent, ACCENT_COLORS["brand"])
-    html = textwrap.dedent(
-        f'<div class="crg-kpi-card" style="--accent-color:{color};">'
+def _metric_label(key: str) -> str:
+    return METRIC_LABELS.get(key, key.replace("_", " ").title())
+
+
+def _kpi_card(label: str, value: str, caption: str, accent: str | None = None) -> None:
+    value_class = f"crg-kpi-value accent-{accent}" if accent else "crg-kpi-value"
+    html = (
+        '<div class="crg-kpi-card">'
         f'<div class="crg-kpi-label">{label}</div>'
-        f'<div class="crg-kpi-value">{value}</div>'
+        f'<div>'
+        f'<div class="{value_class}">{value}</div>'
         f'<div class="crg-kpi-caption">{caption}</div>'
         "</div>"
-    ).strip()
+        "</div>"
+    )
     st.markdown(html, unsafe_allow_html=True)
 
 
 def _empty(title: str, caption: str) -> None:
-    html = textwrap.dedent(
+    html = (
         '<div class="crg-empty">'
         f'<div class="crg-empty-title">{title}</div>'
         f'<div class="crg-empty-caption">{caption}</div>'
         "</div>"
-    ).strip()
+    )
     st.markdown(html, unsafe_allow_html=True)
 
 
 def _section_header(title: str, meta: str = "") -> None:
     meta_html = f'<span class="crg-section-meta">{meta}</span>' if meta else ""
-    html = (
+    st.markdown(
         '<div class="crg-section-header">'
         f'<span class="crg-section-title">{title}</span>'
         f"{meta_html}"
-        "</div>"
+        "</div>",
+        unsafe_allow_html=True,
     )
-    st.markdown(html, unsafe_allow_html=True)
 
 
 def _chart_layout(**overrides) -> dict:
     base = dict(
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
-        font=dict(family="IBM Plex Sans, sans-serif", color="#3D4351", size=12),
+        font=dict(family="IBM Plex Sans, sans-serif", color="#454B56", size=12),
         margin=dict(l=10, r=10, t=10, b=10),
     )
     base.update(overrides)
@@ -89,7 +102,8 @@ def render(engine) -> None:
     n_rollbacks = sum(1 for h in champion_history if h["rolled_back_at"] is not None)
     rollback_rate = n_rollbacks / n_promotions_total if n_promotions_total else None
 
-    # --- KPI row -----------------------------------------------------
+    # --- KPI row: all four cards same visual weight, color reserved for
+    # the two rate cards where it actually encodes good/bad -------------
     cols = st.columns(4)
     with cols[0]:
         _kpi_card("Current batch", str(state["current_batch"]), "pipeline clock position")
@@ -111,7 +125,7 @@ def render(engine) -> None:
             if n_gate_evals
             else "no challengers evaluated yet"
         )
-        _kpi_card("Challenger win rate", value, caption, accent="success")
+        _kpi_card("Challenger win rate", value, caption, accent="success" if n_gate_evals else None)
     with cols[3]:
         value = f"{rollback_rate:.0%}" if rollback_rate is not None else "—"
         caption = (
@@ -119,92 +133,48 @@ def render(engine) -> None:
             if n_promotions_total
             else "no promotions yet"
         )
-        accent = "danger" if (rollback_rate or 0) > 0 else "brand"
+        accent = "danger" if (rollback_rate or 0) > 0 else None
         _kpi_card("Rollback rate", value, caption, accent=accent)
 
     st.markdown('<div class="crg-divider"></div>', unsafe_allow_html=True)
 
-    # --- current champion snapshot ------------------------------------
-    _section_header("Current champion")
-    if latest_champion:
-        metrics_items = list(latest_champion["window_metrics"].items())
-        metric_cols = st.columns(max(len(metrics_items), 1) + 1)
-        for col, (metric, value) in zip(metric_cols, metrics_items):
-            with col:
-                _kpi_card(metric.replace("_", " ").capitalize(), f"{value:.4f}", "on gated window")
-        with metric_cols[-1]:
-            stale = bool(latest_champion.get("reference_stale"))
-            status_label = "Reference stale" if stale else "Reference fresh"
-            _kpi_card(
-                "Rollback reference",
-                status_label,
-                "checks suppressed until re-baselined" if stale else "compared against live batches",
-                accent="warning" if stale else "success",
-            )
-    else:
-        _empty(
-            "No champion has been promoted yet",
-            "Run the bootstrap step, then advance the pipeline clock to see governance activity here.",
-        )
+    # --- current champion (left) + gate evaluation breakdown (right) ---
+    # Both are compact enough to sit side by side rather than stack as two
+    # full-width rows.
+    col_champion, col_funnel = st.columns([3, 2])
 
-    st.markdown('<div class="crg-divider"></div>', unsafe_allow_html=True)
-
-    # --- champion performance trend -----------------------------------
-    _section_header("Champion performance across promotions")
-    if len(champion_history) >= 2:
-        metric_name = next(iter(champion_history[0]["window_metrics"]))
-        xs = list(range(1, len(champion_history) + 1))
-        ys = [h["window_metrics"].get(metric_name) for h in champion_history]
-        rolled_back_xs = [x for x, h in zip(xs, champion_history) if h["rolled_back_at"] is not None]
-        rolled_back_ys = [y for y, h in zip(ys, champion_history) if h["rolled_back_at"] is not None]
-        hover_versions = [f"v{h['model_version']}" for h in champion_history]
-
-        fig = go.Figure()
-        fig.add_trace(
-            go.Scatter(
-                x=xs,
-                y=ys,
-                mode="lines+markers",
-                name=metric_name,
-                line=dict(color="#14515E", width=2.5),
-                marker=dict(size=7, color="#14515E"),
-                fill="tozeroy",
-                fillcolor="rgba(20, 81, 94, 0.07)",
-                text=hover_versions,
-                hovertemplate="%{text}<br>" + metric_name + ": %{y:.4f}<extra></extra>",
-            )
-        )
-        if rolled_back_xs:
-            fig.add_trace(
-                go.Scatter(
-                    x=rolled_back_xs,
-                    y=rolled_back_ys,
-                    mode="markers",
-                    name="rolled back",
-                    marker=dict(color="#9A2E2E", size=11, symbol="x", line=dict(width=2)),
-                    hovertemplate="rolled back<br>" + metric_name + ": %{y:.4f}<extra></extra>",
+    with col_champion:
+        _section_header("Current champion")
+        if latest_champion:
+            cells = []
+            for metric, value in latest_champion["window_metrics"].items():
+                cells.append(
+                    '<div class="crg-metric-cell">'
+                    f'<div class="crg-metric-cell-label">{_metric_label(metric)}</div>'
+                    f'<div class="crg-metric-cell-value">{value:.4f}</div>'
+                    '<div class="crg-metric-cell-caption">on gated window</div>'
+                    "</div>"
                 )
+            stale = bool(latest_champion.get("reference_stale"))
+            badge_class = "crg-badge-stale" if stale else "crg-badge-promoted"
+            badge_label = "Stale" if stale else "Fresh"
+            cells.append(
+                '<div class="crg-metric-cell">'
+                '<div class="crg-metric-cell-label">Rollback reference</div>'
+                '<div class="crg-metric-cell-status">'
+                f'<span class="crg-badge {badge_class}">{badge_label}</span>'
+                "</div>"
+                '<div class="crg-metric-cell-caption">'
+                f'{"suppressed until re-baselined" if stale else "compared against live batches"}'
+                "</div>"
+                "</div>"
             )
-        fig.update_layout(
-            **_chart_layout(
-                height=300,
-                xaxis=dict(title="promotion #", showgrid=False, dtick=1),
-                yaxis=dict(title=metric_name, showgrid=True, gridcolor="#EEF0F3", zeroline=False),
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-                hovermode="closest",
+            st.markdown(f'<div class="crg-metric-block">{"".join(cells)}</div>', unsafe_allow_html=True)
+        else:
+            _empty(
+                "No champion has been promoted yet",
+                "Run the bootstrap step, then advance the pipeline clock to see governance activity here.",
             )
-        )
-        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
-    else:
-        _empty(
-            "Not enough promotions yet",
-            "The trend chart needs at least two promoted champions to show how performance has moved.",
-        )
-
-    st.markdown('<div class="crg-divider"></div>', unsafe_allow_html=True)
-
-    # --- gate evaluation breakdown + recent activity, side by side -----
-    col_funnel, col_activity = st.columns([1, 1])
 
     with col_funnel:
         _section_header("Gate evaluations", meta=f"{n_gate_evals} total")
@@ -231,6 +201,62 @@ def render(engine) -> None:
         else:
             _empty("No challengers evaluated yet", "Gate evaluations appear once a retrain is triggered.")
 
+    st.markdown('<div class="crg-divider"></div>', unsafe_allow_html=True)
+
+    # --- champion performance trend (left) + recent activity (right) ---
+    col_trend, col_activity = st.columns([1, 1])
+
+    with col_trend:
+        _section_header("Champion performance across promotions")
+        if len(champion_history) >= 2:
+            metric_name = next(iter(champion_history[0]["window_metrics"]))
+            metric_label = _metric_label(metric_name)
+            xs = list(range(1, len(champion_history) + 1))
+            ys = [h["window_metrics"].get(metric_name) for h in champion_history]
+            rolled_back_xs = [x for x, h in zip(xs, champion_history) if h["rolled_back_at"] is not None]
+            rolled_back_ys = [y for y, h in zip(ys, champion_history) if h["rolled_back_at"] is not None]
+            hover_versions = [f"v{h['model_version']}" for h in champion_history]
+
+            fig = go.Figure()
+            fig.add_trace(
+                go.Scatter(
+                    x=xs,
+                    y=ys,
+                    mode="lines+markers",
+                    name=metric_label,
+                    line=dict(color="#2A5A62", width=2),
+                    marker=dict(size=6, color="#2A5A62"),
+                    text=hover_versions,
+                    hovertemplate="%{text}<br>" + metric_label + ": %{y:.4f}<extra></extra>",
+                )
+            )
+            if rolled_back_xs:
+                fig.add_trace(
+                    go.Scatter(
+                        x=rolled_back_xs,
+                        y=rolled_back_ys,
+                        mode="markers",
+                        name="rolled back",
+                        marker=dict(color="#9C3B33", size=10, symbol="x", line=dict(width=2)),
+                        hovertemplate="rolled back<br>" + metric_label + ": %{y:.4f}<extra></extra>",
+                    )
+                )
+            fig.update_layout(
+                **_chart_layout(
+                    height=270,
+                    xaxis=dict(title="promotion #", showgrid=False, dtick=1),
+                    yaxis=dict(title=metric_label, showgrid=True, gridcolor="#EEF0F2", zeroline=False),
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                    hovermode="closest",
+                )
+            )
+            st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+        else:
+            _empty(
+                "Not enough promotions yet",
+                "The trend chart needs at least two promoted champions to show how performance has moved.",
+            )
+
     with col_activity:
         _section_header("Recent activity", meta=f"last {len(recent_events)} events")
         event_counts: dict[str, int] = {}
@@ -242,7 +268,7 @@ def render(engine) -> None:
         else:
             labels = sorted(event_counts, key=lambda k: event_counts[k])
             values = [event_counts[k] for k in labels]
-            bar_colors = [EVENT_COLORS.get(k, "#14515E") for k in labels]
+            bar_colors = [EVENT_COLORS_HEX.get(k, "#2A5A62") for k in labels]
 
             fig = go.Figure(
                 data=[
@@ -260,7 +286,7 @@ def render(engine) -> None:
             fig.update_layout(
                 **_chart_layout(
                     margin=dict(l=10, r=24, t=6, b=10),
-                    height=280,
+                    height=270,
                     xaxis=dict(showgrid=False, zeroline=False, visible=False),
                     yaxis=dict(showgrid=False, tickfont=dict(size=11, family="IBM Plex Mono")),
                     showlegend=False,
