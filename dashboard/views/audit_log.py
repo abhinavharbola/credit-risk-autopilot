@@ -80,7 +80,7 @@ def render(engine) -> None:
         view = st.radio("Quick view", list(QUICK_VIEWS), horizontal=True, label_visibility="collapsed")
     with col_range:
         range_label = st.radio(
-            "Range", list(RANGE_OPTIONS), horizontal=True, label_visibility="collapsed", index=1
+            "Range", list(RANGE_OPTIONS), horizontal=True, label_visibility="collapsed", index=0
         )
 
     event_type, predicate = QUICK_VIEWS[view]

@@ -161,7 +161,7 @@ h1, h2, h3 { font-family: var(--font-sans); color: var(--ink-900); letter-spacin
 }
 
 .crg-brand-title {
-    font-size: 1.5rem;
+    font-size: 1.85rem;
     font-weight: 700;
     color: var(--ink-900);
     letter-spacing: -0.015em;
@@ -220,24 +220,27 @@ h1, h2, h3 { font-family: var(--font-sans); color: var(--ink-900); letter-spacin
    scale rather than Streamlit's default tab styling.
    --------------------------------------------------------------- */
 
-[data-testid="stTabs"] { margin-top: 6px; }
+[data-testid="stTabs"] { margin-top: 10px; }
 
 [data-testid="stTabs"] [data-baseweb="tab-list"] {
-    gap: 26px;
+    display: flex;
+    width: 100%;
     border-bottom: 1px solid var(--line);
     background: transparent;
 }
 
 [data-testid="stTabs"] [data-baseweb="tab"] {
+    flex: 1;
+    justify-content: center;
     font-family: var(--font-sans);
     font-weight: 600;
-    font-size: 0.86rem;
+    font-size: 0.95rem;
     color: var(--ink-400);
-    padding: 9px 2px;
+    padding: 10px 2px;
     background: transparent;
 }
 
-[data-testid="stTabs"] button[aria-selected="true"] p { color: var(--brand); }
+[data-testid="stTabs"] button[aria-selected="true"] p { color: var(--brand); font-weight: 700; }
 
 [data-testid="stTabs"] [data-baseweb="tab-highlight"] {
     background-color: var(--brand);
@@ -248,40 +251,14 @@ h1, h2, h3 { font-family: var(--font-sans); color: var(--ink-900); letter-spacin
 
 [data-testid="stTabs"] [data-baseweb="tab-panel"] { padding-top: 18px; }
 
-/* ---------------------------------------------------------------
-   Equal-height paired cards: when two sections sit side by side in
-   st.columns (current champion / gate evaluations, trend chart /
-   activity chart), the shorter one should match its neighbor's
-   height rather than float short. Streamlit's column flex row
-   already stretches the column containers to equal height; this
-   propagates that stretch down to the actual card element.
-   --------------------------------------------------------------- */
-
-[data-testid="stHorizontalBlock"] { align-items: stretch; }
-
-[data-testid="stHorizontalBlock"] > div[data-testid="column"] > div {
-    height: 100%;
-}
-
-[data-testid="stHorizontalBlock"] [data-testid="stVerticalBlock"] {
-    height: 100%;
-    display: flex;
-    flex-direction: column;
-}
-
-[data-testid="stHorizontalBlock"] [data-testid="stVerticalBlock"] > [data-testid="element-container"]:last-child {
-    flex: 1;
-    display: flex;
-}
-
-[data-testid="stHorizontalBlock"] [data-testid="stVerticalBlock"] > [data-testid="element-container"]:last-child > div {
-    flex: 1;
-    width: 100%;
-}
+/* Paired cards use their natural content height. Streamlit's
+   column containers may stretch, but the cards themselves should not
+   inherit that height and create empty space. */
 
 .crg-metric-block, .crg-funnel {
-    height: 100%;
-    min-height: 108px;
+    height: auto;
+    min-height: 0;
+    box-sizing: border-box;
 }
 
 /* ---------------------------------------------------------------
@@ -373,7 +350,6 @@ h1, h2, h3 { font-family: var(--font-sans); color: var(--ink-900); letter-spacin
     border-radius: var(--radius-md);
     box-shadow: var(--shadow-card);
     overflow: hidden;
-    margin-bottom: 6px;
 }
 
 .crg-metric-cell {
