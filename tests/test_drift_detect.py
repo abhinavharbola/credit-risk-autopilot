@@ -88,7 +88,7 @@ def test_reduce_to_fingerprint_never_returns_none_drift_share_for_valid_output()
 
 
 def test_retrain_would_trigger_at_the_configured_threshold():
-    """Uses config/gate_config.yaml's actual reference_fingerprint_drift_threshold
+    """Uses config/gate_config.yaml's actual retrain_drift_share_threshold
     (0.3, not the original 0.1 - raised after a real run showed 0.1 producing
     false retrain triggers on undrifted batches from multiple-testing noise
     alone, see the comment in gate_config.yaml for the statistical rationale).
@@ -96,7 +96,7 @@ def test_retrain_would_trigger_at_the_configured_threshold():
     flagged), which still clears 0.3.
     """
     fingerprint = _reduce_to_fingerprint(REAL_EVIDENTLY_OUTPUT)
-    threshold = 0.3  # config/gate_config.yaml: reference_fingerprint_drift_threshold
+    threshold = 0.3  # config/gate_config.yaml: retrain_drift_share_threshold
     triggered = fingerprint["drift_share"] is not None and fingerprint["drift_share"] >= threshold
     assert triggered is True
 
@@ -124,4 +124,28 @@ def test_reduce_to_fingerprint_handles_missing_metrics_key_gracefully():
     assert fingerprint == {"drift_share": None, "column_drift_scores": {}}
 
 
+def test_check_retrain_trigger_raises_instead_of_silently_not_triggering():
+    """Fix for the actual bug that shipped once: an unreadable Evidently
+    report used to leave drift_share=None, and check_retrain_trigger treated
+    that identically to 'no drift detected' - silently disabling retraining
+    for an entire run with no error anywhere. It must now raise instead.
+    """
+    import pandas as pd
+    import pytest
 
+    from src.drift.detect import DriftFingerprintError, check_retrain_trigger
+
+    empty_df = pd.DataFrame({"DebtRatio": [0.1, 0.2]})
+
+    def fake_compute_fingerprint(current_df, reference_df, columns=None):
+        return {"drift_share": None, "column_drift_scores": {}}
+
+    import src.drift.detect as detect_mod
+
+    orig = detect_mod.compute_fingerprint
+    detect_mod.compute_fingerprint = fake_compute_fingerprint
+    try:
+        with pytest.raises(DriftFingerprintError):
+            check_retrain_trigger(empty_df, empty_df, drift_share_threshold=0.3)
+    finally:
+        detect_mod.compute_fingerprint = orig

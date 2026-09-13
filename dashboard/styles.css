@@ -1,353 +1,380 @@
-/* Design system: Inter for UI text, JetBrains Mono for every numeric value
-   (the monospace-for-data convention engineering dashboards use - Linear,
-   Vercel, Grafana). Deep navy-indigo accent, refined neutral scale, semantic
-   colors with matching soft backgrounds for badges/chips.
+/* ============================================================
+   Credit Risk Governance — design system (v2, rebuilt)
 
-   Type scale is deliberate rather than ad hoc: five sizes (display, section,
-   subsection, body, caption), each with its own weight and tracking, reused
-   everywhere rather than one-off font-sizes per component. Numeric labels
-   use sentence case + a colored status dot instead of tracked all-caps -
-   all-caps eyebrow labels are the single most common tell of an unstyled
-   dashboard, so category is communicated with color instead. */
+   One light theme, no toggle. Typography: IBM Plex Sans for UI
+   text, IBM Plex Mono for every numeric/identifier value — the
+   same monospace-for-data convention used by terminal-style
+   risk/ops tooling, chosen so figures stay legible and aligned
+   in dense tables.
 
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+   Palette: a single steel-teal brand color (not a generic SaaS
+   indigo) paired with a restrained, desaturated neutral scale and
+   conventional semantic colors. Built to read as a compliance /
+   risk-ops tool a bank would actually deploy internally, not a
+   marketing dashboard.
+   ============================================================ */
+
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600;700&display=swap');
 
 :root {
-    --bg-page: #F5F6F8;
-    --bg-surface: #FFFFFF;
-    --bg-surface-raised: #FBFBFC;
-    --border-subtle: #E4E7EC;
-    --border-strong: #D0D5DD;
+    /* neutrals */
+    --paper:        #F5F6F8;
+    --surface:      #FFFFFF;
+    --surface-alt:  #FAFBFC;
+    --line:         #E2E5EA;
+    --line-strong:  #C9CED6;
 
-    --text-primary: #101828;
-    --text-secondary: #475467;
-    --text-tertiary: #98A2B3;
+    --ink-900: #12151C;
+    --ink-700: #3D4351;
+    --ink-500: #6B7280;
+    --ink-400: #8992A1;
 
-    --accent: #2E3F73;
-    --accent-soft: #EEF1F8;
-    --accent-soft-border: #D7DDF0;
+    /* brand: steel teal, one color, used sparingly and with intent */
+    --brand:        #14515E;
+    --brand-hover:  #0E3F49;
+    --brand-soft:   #E8F0F1;
+    --brand-border: #C4D8DB;
 
-    --success: #027A48;
-    --success-bg: #ECFDF3;
-    --success-border: #ABEFC6;
+    /* semantic */
+    --success:      #15633F;
+    --success-soft: #E7F4EC;
+    --success-border: #B9DEC7;
 
-    --warning: #B54708;
-    --warning-bg: #FFFAEB;
-    --warning-border: #FEDF89;
+    --warning:      #8A5A0B;
+    --warning-soft: #FBF1DF;
+    --warning-border: #EFD7A0;
 
-    --danger: #B42318;
-    --danger-bg: #FEF3F2;
-    --danger-border: #FECDCA;
+    --danger:       #9A2E2E;
+    --danger-soft:  #FBEAEA;
+    --danger-border: #EEC5C5;
 
-    --neutral-bg: #F2F4F7;
-    --neutral-border: #E4E7EC;
+    --neutral-soft: #EEF0F3;
+    --neutral-border: #DEE1E6;
 
-    /* secondary data colors, shared with the Python EVENT_COLORS constants
-       so chart colors and badge colors always agree */
-    --chart-violet: #7C3AED;
-    --chart-blue: #6172F3;
-    --chart-slate: #98A2B3;
+    /* chart-only accents, kept distinct from semantic colors */
+    --chart-plum:  #6B4C7A;
+    --chart-blue:  #35607A;
+    --chart-slate: #8992A1;
 
-    --shadow-xs: 0 1px 2px rgba(16, 24, 40, 0.05);
-    --shadow-sm: 0 1px 3px rgba(16, 24, 40, 0.1), 0 1px 2px rgba(16, 24, 40, 0.06);
-    --shadow-card: 0 1px 2px rgba(16, 24, 40, 0.04), 0 1px 8px rgba(16, 24, 40, 0.04);
+    --shadow-xs: 0 1px 2px rgba(18, 21, 28, 0.05);
+    --shadow-card: 0 1px 2px rgba(18, 21, 28, 0.04), 0 4px 14px rgba(18, 21, 28, 0.05);
 
-    --radius-sm: 8px;
+    --radius-sm: 6px;
     --radius-md: 10px;
     --radius-lg: 14px;
 
-    --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-    --font-mono: 'JetBrains Mono', 'SFMono-Regular', Consolas, monospace;
+    --font-sans: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --font-mono: 'IBM Plex Mono', 'SFMono-Regular', Consolas, monospace;
 
-    /* type scale - use these, don't invent one-off sizes */
-    --text-display: 1.55rem;   /* app title */
-    --text-section: 1.02rem;   /* section headers */
-    --text-subsection: 0.86rem;
+    --text-display: 1.4rem;
+    --text-section: 0.98rem;
     --text-body: 0.86rem;
-    --text-caption: 0.74rem;
+    --text-caption: 0.75rem;
     --text-micro: 0.68rem;
+
+    --sidebar-w: 236px;
 }
 
-/* --- global type + layout --- */
+/* ---------------------------------------------------------------
+   Global type + page shell
+   --------------------------------------------------------------- */
 
 html, body, [data-testid="stAppViewContainer"], [data-testid="stMarkdownContainer"],
-.stMarkdown, p, span, div, label, button {
+.stMarkdown, p, span, div, label, button, input, select, textarea {
     font-family: var(--font-sans);
+    color: var(--ink-900);
 }
 
-[data-testid="stAppViewContainer"] {
-    background: var(--bg-page);
-}
-
-[data-testid="stHeader"] {
-    background: transparent;
-}
+[data-testid="stAppViewContainer"] { background: var(--paper); }
+[data-testid="stHeader"] { background: transparent; height: 0; }
+[data-testid="stToolbar"] { display: none; }
 
 [data-testid="stAppViewContainer"] .main .block-container {
-    padding-top: 2rem;
+    padding-top: 1.6rem;
     padding-bottom: 3rem;
-    max-width: 1220px;
+    max-width: 1180px;
 }
 
-[data-testid="stVerticalBlock"] {
-    gap: 0.75rem;
-}
+[data-testid="stVerticalBlock"] { gap: 0.7rem; }
 
-h1, h2, h3 {
-    font-family: var(--font-sans);
-    color: var(--text-primary);
-    letter-spacing: -0.02em;
-}
+h1, h2, h3 { font-family: var(--font-sans); color: var(--ink-900); letter-spacing: -0.01em; }
 
-/* tabular figures everywhere a number appears, not just inside .crg-* -
-   Streamlit widgets and st.dataframe cells included */
 [data-testid="stMetricValue"], .crg-mono, code {
+    font-family: var(--font-mono) !important;
     font-variant-numeric: tabular-nums;
 }
 
-/* --- app header --- */
+/* ---------------------------------------------------------------
+   Sidebar: brand, nav, live status footer
+   --------------------------------------------------------------- */
 
-.crg-appheader {
-    display: flex;
-    justify-content: space-between;
-    align-items: flex-end;
-    flex-wrap: wrap;
-    gap: 16px;
-    padding-bottom: 18px;
-    border-bottom: 1px solid var(--border-subtle);
-    margin-bottom: 28px;
+[data-testid="stSidebar"] {
+    background: var(--surface);
+    border-right: 1px solid var(--line);
+    min-width: var(--sidebar-w) !important;
+    width: var(--sidebar-w) !important;
 }
 
-.crg-appheader-brand {
+[data-testid="stSidebar"] > div:first-child {
+    padding-top: 1.4rem;
+}
+
+.crg-brand {
     display: flex;
     align-items: center;
-    gap: 12px;
+    gap: 10px;
+    padding: 0 1.1rem 1.1rem 1.1rem;
+    border-bottom: 1px solid var(--line);
+    margin-bottom: 0.4rem;
 }
 
-.crg-appheader-mark {
-    width: 34px;
-    height: 34px;
-    border-radius: 9px;
-    background: linear-gradient(135deg, var(--accent) 0%, #4A5FA5 100%);
+.crg-brand-mark {
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    background: var(--brand);
     display: flex;
     align-items: center;
     justify-content: center;
-    color: white;
+    color: #fff;
     font-family: var(--font-mono);
     font-weight: 700;
-    font-size: 0.95rem;
-    letter-spacing: -0.02em;
+    font-size: 0.82rem;
+    letter-spacing: 0;
     flex-shrink: 0;
-    box-shadow: var(--shadow-sm);
 }
 
-.crg-appheader-title {
-    font-size: var(--text-display);
-    font-weight: 800;
-    color: var(--text-primary);
-    letter-spacing: -0.025em;
-    line-height: 1.15;
+.crg-brand-name {
+    font-size: 0.92rem;
+    font-weight: 700;
+    color: var(--ink-900);
+    line-height: 1.2;
 }
 
-.crg-appheader-subtitle {
-    font-size: var(--text-caption);
-    color: var(--text-tertiary);
-    margin-top: 2px;
+.crg-brand-sub {
+    font-size: 0.68rem;
+    color: var(--ink-400);
+    line-height: 1.2;
 }
 
-.crg-status-pill {
-    display: inline-flex;
+.crg-nav-label {
+    font-size: var(--text-micro);
+    font-weight: 600;
+    color: var(--ink-400);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    padding: 0 1.1rem;
+    margin: 0.6rem 0 0.3rem 0;
+}
+
+/* Restyle st.radio (used as the sidebar nav) into a flat nav list */
+[data-testid="stSidebar"] [data-testid="stRadio"] {
+    padding: 0 0.6rem;
+}
+
+[data-testid="stSidebar"] [data-testid="stRadio"] > div {
+    gap: 2px;
+}
+
+[data-testid="stSidebar"] [data-testid="stRadio"] label {
+    padding: 8px 12px;
+    border-radius: var(--radius-sm);
+    width: 100%;
+    font-size: 0.86rem;
+    font-weight: 500;
+    color: var(--ink-700);
+    transition: background 0.1s ease;
+}
+
+[data-testid="stSidebar"] [data-testid="stRadio"] label:hover {
+    background: var(--surface-alt);
+}
+
+[data-testid="stSidebar"] [data-testid="stRadio"] label[data-baseweb="radio"] > div:first-child {
+    display: none;
+}
+
+[data-testid="stSidebar"] [data-testid="stRadio"] input:checked + div {
+    color: var(--brand);
+}
+
+[data-testid="stSidebar"] [data-testid="stRadio"] label:has(input:checked) {
+    background: var(--brand-soft);
+}
+
+[data-testid="stSidebar"] [data-testid="stRadio"] label:has(input:checked) p {
+    color: var(--brand);
+    font-weight: 600;
+}
+
+.crg-sidebar-footer {
+    margin: 1.2rem 0.9rem 0 0.9rem;
+    padding-top: 0.9rem;
+    border-top: 1px solid var(--line);
+}
+
+.crg-sidebar-status-row {
+    display: flex;
     align-items: center;
-    gap: 10px;
-    background: var(--bg-surface);
-    border: 1px solid var(--border-subtle);
-    border-radius: 999px;
-    padding: 8px 16px 8px 12px;
-    box-shadow: var(--shadow-xs);
-    white-space: nowrap;
+    justify-content: space-between;
+    padding: 5px 0;
+    font-size: var(--text-caption);
 }
 
-.crg-status-pill-item {
-    display: inline-flex;
+.crg-sidebar-status-label { color: var(--ink-400); }
+
+.crg-sidebar-status-value {
+    font-family: var(--font-mono);
+    font-weight: 600;
+    color: var(--ink-900);
+    display: flex;
     align-items: center;
     gap: 6px;
-    font-family: var(--font-mono);
-    font-size: var(--text-caption);
-    color: var(--text-secondary);
 }
 
-.crg-status-pill-divider {
-    width: 1px;
-    height: 14px;
-    background: var(--border-strong);
-}
-
-.crg-status-dot {
+.crg-dot {
     width: 7px;
     height: 7px;
     border-radius: 50%;
     background: var(--success);
-    box-shadow: 0 0 0 3px var(--success-bg);
     flex-shrink: 0;
 }
 
-.crg-status-dot.warn { background: var(--warning); box-shadow: 0 0 0 3px var(--warning-bg); }
-.crg-status-dot.idle { background: var(--text-tertiary); box-shadow: 0 0 0 3px var(--neutral-bg); }
+.crg-dot.warn { background: var(--warning); }
+.crg-dot.idle { background: var(--ink-400); }
 
-/* --- section headers --- */
+/* ---------------------------------------------------------------
+   Page header (per-view title + description)
+   --------------------------------------------------------------- */
+
+.crg-page-header { margin-bottom: 22px; }
+
+.crg-page-title {
+    font-size: var(--text-display);
+    font-weight: 700;
+    color: var(--ink-900);
+    letter-spacing: -0.015em;
+    line-height: 1.2;
+}
+
+.crg-page-desc {
+    font-size: var(--text-caption);
+    color: var(--ink-500);
+    margin-top: 3px;
+    max-width: 640px;
+}
+
+/* ---------------------------------------------------------------
+   Section headers
+   --------------------------------------------------------------- */
 
 .crg-section-header {
     display: flex;
     align-items: baseline;
     justify-content: space-between;
     gap: 12px;
-    margin: 4px 0 14px 0;
+    margin: 4px 0 12px 0;
 }
 
 .crg-section-title {
     font-size: var(--text-section);
     font-weight: 700;
-    color: var(--text-primary);
-    letter-spacing: -0.01em;
+    color: var(--ink-900);
+    letter-spacing: -0.005em;
 }
 
 .crg-section-meta {
     font-family: var(--font-mono);
     font-size: var(--text-caption);
-    color: var(--text-tertiary);
+    color: var(--ink-400);
     white-space: nowrap;
 }
 
-/* --- KPI cards --- */
-
-.crg-kpi-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-    gap: 12px;
-}
+/* ---------------------------------------------------------------
+   KPI cards
+   --------------------------------------------------------------- */
 
 .crg-kpi-card {
     position: relative;
-    background: var(--bg-surface);
-    border: 1px solid var(--border-subtle);
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-top: 2px solid var(--accent-color, var(--brand));
     border-radius: var(--radius-md);
-    padding: 16px 18px;
+    padding: 14px 16px;
     box-shadow: var(--shadow-card);
-    overflow: hidden;
-}
-
-.crg-kpi-header {
-    display: flex;
-    align-items: center;
-    gap: 7px;
-    margin-bottom: 10px;
-}
-
-.crg-kpi-dot {
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    flex-shrink: 0;
 }
 
 .crg-kpi-label {
     font-size: var(--text-caption);
     font-weight: 500;
-    letter-spacing: 0.005em;
-    color: var(--text-secondary);
-}
-
-.crg-kpi-value-row {
-    display: flex;
-    align-items: baseline;
-    gap: 8px;
+    color: var(--ink-500);
+    margin-bottom: 8px;
 }
 
 .crg-kpi-value {
     font-family: var(--font-mono);
-    font-size: 1.7rem;
+    font-size: 1.55rem;
     font-weight: 700;
-    color: var(--text-primary);
+    color: var(--ink-900);
     line-height: 1.1;
     letter-spacing: -0.01em;
 }
 
-.crg-kpi-trend {
-    display: inline-flex;
-    align-items: center;
-    gap: 2px;
-    font-family: var(--font-mono);
-    font-size: var(--text-micro);
-    font-weight: 600;
-    padding: 2px 6px;
-    border-radius: 5px;
-}
-
-.crg-kpi-trend.up   { color: var(--success); background: var(--success-bg); }
-.crg-kpi-trend.down { color: var(--danger); background: var(--danger-bg); }
-.crg-kpi-trend.flat { color: var(--text-tertiary); background: var(--neutral-bg); }
-
 .crg-kpi-caption {
     font-size: var(--text-caption);
-    color: var(--text-tertiary);
-    margin-top: 7px;
+    color: var(--ink-400);
+    margin-top: 6px;
 }
 
-/* legacy alias kept so existing call sites don't break */
-.crg-metric-card { background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 16px 18px; box-shadow: var(--shadow-card); }
-.crg-metric-label { font-size: var(--text-caption); font-weight: 500; color: var(--text-secondary); margin-bottom: 8px; }
-.crg-metric-value { font-family: var(--font-mono); font-size: 1.65rem; font-weight: 700; color: var(--text-primary); line-height: 1.1; letter-spacing: -0.01em; }
-.crg-metric-caption { font-size: var(--text-caption); color: var(--text-tertiary); margin-top: 6px; }
-
-/* --- stat strip (compact inline stats above a chart) --- */
+/* ---------------------------------------------------------------
+   Stat strip (compact inline row of numbers above a chart)
+   --------------------------------------------------------------- */
 
 .crg-stat-strip {
     display: flex;
     flex-wrap: wrap;
-    gap: 0;
-    background: var(--bg-surface);
-    border: 1px solid var(--border-subtle);
+    background: var(--surface);
+    border: 1px solid var(--line);
     border-radius: var(--radius-md);
     overflow: hidden;
-    margin-bottom: 16px;
+    margin-bottom: 14px;
 }
 
 .crg-stat-strip-item {
     flex: 1;
     min-width: 140px;
-    padding: 13px 18px;
-    border-right: 1px solid var(--border-subtle);
+    padding: 12px 16px;
+    border-right: 1px solid var(--line);
 }
 
 .crg-stat-strip-item:last-child { border-right: none; }
 
 .crg-stat-strip-label {
     font-size: var(--text-caption);
-    color: var(--text-tertiary);
-    margin-bottom: 4px;
+    color: var(--ink-400);
+    margin-bottom: 3px;
 }
 
 .crg-stat-strip-value {
     font-family: var(--font-mono);
-    font-size: 1.05rem;
+    font-size: 1.0rem;
     font-weight: 700;
-    color: var(--text-primary);
+    color: var(--ink-900);
 }
 
-/* --- funnel / breakdown bars --- */
+/* ---------------------------------------------------------------
+   Funnel / breakdown bars
+   --------------------------------------------------------------- */
 
 .crg-funnel {
-    background: var(--bg-surface);
-    border: 1px solid var(--border-subtle);
+    background: var(--surface);
+    border: 1px solid var(--line);
     border-radius: var(--radius-md);
-    padding: 18px 20px;
+    padding: 16px 18px;
     box-shadow: var(--shadow-card);
 }
 
-.crg-funnel-row {
-    margin-bottom: 14px;
-}
-
+.crg-funnel-row { margin-bottom: 12px; }
 .crg-funnel-row:last-child { margin-bottom: 0; }
 
 .crg-funnel-row-label {
@@ -355,35 +382,34 @@ h1, h2, h3 {
     justify-content: space-between;
     align-items: baseline;
     font-size: var(--text-body);
-    color: var(--text-secondary);
+    color: var(--ink-700);
     margin-bottom: 6px;
 }
 
 .crg-funnel-row-count {
     font-family: var(--font-mono);
     font-weight: 700;
-    color: var(--text-primary);
+    color: var(--ink-900);
 }
 
 .crg-funnel-track {
-    height: 8px;
-    background: var(--neutral-bg);
+    height: 7px;
+    background: var(--neutral-soft);
     border-radius: 999px;
     overflow: hidden;
 }
 
-.crg-funnel-fill {
-    height: 100%;
-    border-radius: 999px;
-}
+.crg-funnel-fill { height: 100%; border-radius: 999px; }
 
-/* --- badges --- */
+/* ---------------------------------------------------------------
+   Badges
+   --------------------------------------------------------------- */
 
 .crg-badge {
     display: inline-flex;
     align-items: center;
-    padding: 3px 10px;
-    border-radius: 999px;
+    padding: 3px 9px;
+    border-radius: 5px;
     font-size: var(--text-micro);
     font-weight: 600;
     letter-spacing: 0.01em;
@@ -391,70 +417,61 @@ h1, h2, h3 {
     white-space: nowrap;
 }
 
-.crg-badge-promoted { background: var(--success-bg); color: var(--success); border-color: var(--success-border); }
-.crg-badge-rejected { background: var(--neutral-bg); color: var(--text-secondary); border-color: var(--neutral-border); }
-.crg-badge-rollback { background: var(--danger-bg); color: var(--danger); border-color: var(--danger-border); }
-.crg-badge-stale    { background: var(--warning-bg); color: var(--warning); border-color: var(--warning-border); }
-.crg-badge-neutral  { background: var(--accent-soft); color: var(--accent); border-color: var(--accent-soft-border); }
+.crg-badge-promoted { background: var(--success-soft); color: var(--success); border-color: var(--success-border); }
+.crg-badge-rejected { background: var(--neutral-soft); color: var(--ink-700); border-color: var(--neutral-border); }
+.crg-badge-rollback { background: var(--danger-soft); color: var(--danger); border-color: var(--danger-border); }
+.crg-badge-stale    { background: var(--warning-soft); color: var(--warning); border-color: var(--warning-border); }
+.crg-badge-neutral  { background: var(--brand-soft); color: var(--brand); border-color: var(--brand-border); }
 
-/* --- lineage timeline --- */
+/* ---------------------------------------------------------------
+   Lineage timeline
+   --------------------------------------------------------------- */
 
 .crg-timeline {
     position: relative;
     margin-left: 6px;
-    padding-left: 26px;
-    border-left: 2px solid var(--border-subtle);
+    padding-left: 24px;
+    border-left: 2px solid var(--line);
 }
 
-.crg-timeline-item {
-    position: relative;
-    padding-bottom: 20px;
-}
+.crg-timeline-item { position: relative; padding-bottom: 18px; }
 
 .crg-timeline-item::before {
     content: "";
     position: absolute;
-    left: -33px;
-    top: 22px;
-    width: 12px;
-    height: 12px;
+    left: -31px;
+    top: 20px;
+    width: 11px;
+    height: 11px;
     border-radius: 50%;
-    background: var(--accent);
-    border: 3px solid var(--bg-page);
-    box-shadow: 0 0 0 2px var(--accent);
+    background: var(--brand);
+    border: 3px solid var(--paper);
+    box-shadow: 0 0 0 1.5px var(--brand);
 }
 
 .crg-timeline-item.rolled-back::before {
     background: var(--danger);
-    box-shadow: 0 0 0 2px var(--danger);
+    box-shadow: 0 0 0 1.5px var(--danger);
 }
 
 .crg-timeline-card {
-    background: var(--bg-surface);
-    border: 1px solid var(--border-subtle);
+    background: var(--surface);
+    border: 1px solid var(--line);
     border-radius: var(--radius-lg);
-    padding: 16px 20px;
+    padding: 14px 18px;
     box-shadow: var(--shadow-card);
 }
 
 .crg-timeline-version {
     font-family: var(--font-mono);
     font-weight: 700;
-    font-size: 0.98rem;
-    color: var(--text-primary);
-    margin-right: 10px;
+    font-size: 0.94rem;
+    color: var(--ink-900);
+    margin-right: 8px;
 }
 
-.crg-timeline-meta {
-    font-size: var(--text-caption);
-    color: var(--text-secondary);
-    margin-top: 6px;
-}
-
-.crg-timeline-meta-mono {
-    font-family: var(--font-mono);
-    color: var(--text-secondary);
-}
+.crg-timeline-meta { font-size: var(--text-caption); color: var(--ink-700); margin-top: 5px; }
+.crg-timeline-meta-mono { font-family: var(--font-mono); color: var(--ink-700); }
 
 .crg-timeline-delta {
     display: inline-flex;
@@ -468,21 +485,23 @@ h1, h2, h3 {
     margin-left: 8px;
 }
 
-.crg-timeline-delta.up   { color: var(--success); background: var(--success-bg); }
-.crg-timeline-delta.down { color: var(--danger); background: var(--danger-bg); }
-.crg-timeline-delta.flat { color: var(--text-tertiary); background: var(--neutral-bg); }
+.crg-timeline-delta.up   { color: var(--success); background: var(--success-soft); }
+.crg-timeline-delta.down { color: var(--danger); background: var(--danger-soft); }
+.crg-timeline-delta.flat { color: var(--ink-400); background: var(--neutral-soft); }
 
-/* --- audit log rows --- */
+/* ---------------------------------------------------------------
+   Audit log rows
+   --------------------------------------------------------------- */
 
 .crg-audit-row {
     display: flex;
     align-items: center;
     gap: 12px;
-    padding: 10px 14px;
-    background: var(--bg-surface);
-    border: 1px solid var(--border-subtle);
-    border-left: 3px solid var(--border-strong);
-    border-radius: 8px;
+    padding: 9px 13px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--line-strong);
+    border-radius: 7px;
     margin-bottom: 3px;
     flex-wrap: wrap;
 }
@@ -490,24 +509,22 @@ h1, h2, h3 {
 .crg-audit-time {
     font-family: var(--font-mono);
     font-size: var(--text-micro);
-    color: var(--text-tertiary);
-    min-width: 175px;
+    color: var(--ink-400);
+    min-width: 172px;
 }
 
-.crg-audit-summary {
-    font-size: var(--text-body);
-    color: var(--text-primary);
-    flex: 1;
-}
+.crg-audit-summary { font-size: var(--text-body); color: var(--ink-900); flex: 1; }
 
-.crg-audit-row.type-promotion      { border-left-color: var(--success); }
-.crg-audit-row.type-rollback       { border-left-color: var(--danger); }
-.crg-audit-row.type-rollback_check { border-left-color: var(--warning); }
-.crg-audit-row.type-drift_check    { border-left-color: var(--chart-blue); }
-.crg-audit-row.type-gate_evaluation{ border-left-color: var(--chart-violet); }
-.crg-audit-row.type-label_release  { border-left-color: var(--text-tertiary); }
+.crg-audit-row.type-promotion       { border-left-color: var(--success); }
+.crg-audit-row.type-rollback        { border-left-color: var(--danger); }
+.crg-audit-row.type-rollback_check  { border-left-color: var(--warning); }
+.crg-audit-row.type-drift_check     { border-left-color: var(--chart-blue); }
+.crg-audit-row.type-gate_evaluation { border-left-color: var(--chart-plum); }
+.crg-audit-row.type-label_release   { border-left-color: var(--ink-400); }
 
-/* --- empty states --- */
+/* ---------------------------------------------------------------
+   Empty states
+   --------------------------------------------------------------- */
 
 .crg-empty {
     display: flex;
@@ -515,60 +532,29 @@ h1, h2, h3 {
     align-items: center;
     justify-content: center;
     text-align: center;
-    padding: 48px 24px;
-    background: var(--bg-surface-raised);
-    border: 1px dashed var(--border-strong);
+    padding: 44px 22px;
+    background: var(--surface-alt);
+    border: 1px dashed var(--line-strong);
     border-radius: var(--radius-lg);
-    color: var(--text-tertiary);
+    color: var(--ink-400);
 }
 
-.crg-empty-title {
-    font-size: var(--text-body);
-    font-weight: 600;
-    color: var(--text-secondary);
-    margin-bottom: 4px;
-}
+.crg-empty-title { font-size: var(--text-body); font-weight: 600; color: var(--ink-700); margin-bottom: 4px; }
+.crg-empty-caption { font-size: var(--text-caption); max-width: 340px; }
 
-.crg-empty-caption {
-    font-size: var(--text-caption);
-    max-width: 340px;
-}
+/* ---------------------------------------------------------------
+   Dividers
+   --------------------------------------------------------------- */
 
-/* --- dividers --- */
+.crg-divider { height: 1px; background: var(--line); margin: 22px 0; }
 
-.crg-divider {
-    height: 1px;
-    background: var(--border-subtle);
-    margin: 24px 0;
-}
-
-/* --- widget polish --- */
-
-[data-testid="stTabs"] [data-baseweb="tab-list"] {
-    gap: 6px;
-    border-bottom: 1px solid var(--border-subtle);
-}
-
-[data-testid="stTabs"] [data-baseweb="tab"] {
-    font-family: var(--font-sans);
-    font-weight: 600;
-    font-size: 0.88rem;
-    color: var(--text-tertiary);
-    padding: 10px 6px;
-}
-
-[data-testid="stTabs"] button[aria-selected="true"] p {
-    color: var(--accent);
-}
-
-[data-testid="stTabs"] [data-baseweb="tab-highlight"] {
-    background-color: var(--accent);
-    height: 2.5px;
-}
+/* ---------------------------------------------------------------
+   Widget polish
+   --------------------------------------------------------------- */
 
 [data-testid="stSelectbox"] div[data-baseweb="select"] > div {
-    border-radius: 8px;
-    border-color: var(--border-subtle);
+    border-radius: 7px;
+    border-color: var(--line);
     font-family: var(--font-sans);
     font-size: var(--text-body);
 }
@@ -576,12 +562,12 @@ h1, h2, h3 {
 [data-testid="stDataFrame"] {
     border-radius: var(--radius-md);
     overflow: hidden;
-    border: 1px solid var(--border-subtle);
+    border: 1px solid var(--line);
 }
 
 [data-testid="stDataFrame"] * {
     font-family: var(--font-mono) !important;
-    font-size: 0.78rem !important;
+    font-size: 0.77rem !important;
 }
 
 [data-testid="stAlert"] {
@@ -592,7 +578,7 @@ h1, h2, h3 {
 
 [data-testid="stExpander"] {
     border-radius: 8px;
-    border-color: var(--border-subtle);
+    border-color: var(--line);
 }
 
 [data-testid="stExpander"] summary {
@@ -600,4 +586,16 @@ h1, h2, h3 {
     font-weight: 500;
 }
 
+button[kind="secondary"], .stButton button {
+    border-radius: 7px;
+    font-family: var(--font-sans);
+    font-size: var(--text-caption);
+    font-weight: 500;
+    border-color: var(--line);
+    color: var(--ink-700);
+}
 
+button[kind="secondary"]:hover, .stButton button:hover {
+    border-color: var(--brand);
+    color: var(--brand);
+}

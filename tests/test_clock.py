@@ -79,7 +79,7 @@ def test_losing_racer_never_calls_run_tick():
 
     run_tick_calls = []
 
-    def fake_run_tick(conn, current_batch, raw_batches, training_pool_df, config):
+    def fake_run_tick(conn, current_batch, raw_batches, training_pool_df, config, holdout_df):
         run_tick_calls.append(current_batch)
         return {"batch": current_batch}
 
@@ -92,8 +92,12 @@ def test_losing_racer_never_calls_run_tick():
 
     try:
         raw_batches = [None] * 10
-        result_a = claim_and_run_tick(conn, raw_batches, training_pool_df=None, config={})
-        result_b = claim_and_run_tick(conn, raw_batches, training_pool_df=None, config={})
+        result_a = claim_and_run_tick(
+            conn, raw_batches, training_pool_df=None, config={}, holdout_df=None
+        )
+        result_b = claim_and_run_tick(
+            conn, raw_batches, training_pool_df=None, config={}, holdout_df=None
+        )
     finally:
         clock_mod.get_pipeline_state = orig_get_state
         clock_mod.advance_pipeline_state = orig_advance
@@ -112,11 +116,10 @@ def test_claim_returns_status_when_past_end_of_dataset():
     clock_mod.get_pipeline_state = lambda conn: {"version": 1, "current_batch": 10}
 
     try:
-        result = claim_and_run_tick(conn, raw_batches=[None] * 10, training_pool_df=None, config={})
+        result = claim_and_run_tick(
+            conn, raw_batches=[None] * 10, training_pool_df=None, config={}, holdout_df=None
+        )
     finally:
         clock_mod.get_pipeline_state = orig_get_state
 
     assert result["status"] == "past_end_of_dataset"
-
-
-

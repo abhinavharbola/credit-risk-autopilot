@@ -247,6 +247,3 @@ def advance_pipeline_state(conn: Connection, expected_version: int) -> bool:
     )
     row = result.first()
     return row is not None
-
-
-

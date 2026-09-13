@@ -82,6 +82,3 @@ def train_challenger(train_df: pd.DataFrame, run_name: str) -> tuple[str, str, P
 def score(model: Pipeline, df: pd.DataFrame) -> np.ndarray:
     """Predicted probability of SeriousDlqin2yrs == 1."""
     return model.predict_proba(df[FEATURES])[:, 1]
-
-
-

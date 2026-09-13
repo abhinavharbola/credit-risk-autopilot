@@ -12,30 +12,27 @@ import streamlit as st
 from src.db.repository import get_audit_log, get_champion_history, get_latest_champion, get_pipeline_state
 
 EVENT_COLORS = {
-    "drift_check": "#6172F3",
-    "gate_evaluation": "#7C3AED",
-    "promotion": "#027A48",
-    "rollback": "#B42318",
-    "rollback_check": "#B54708",
-    "label_release": "#98A2B3",
+    "drift_check": "#35607A",
+    "gate_evaluation": "#6B4C7A",
+    "promotion": "#15633F",
+    "rollback": "#9A2E2E",
+    "rollback_check": "#8A5A0B",
+    "label_release": "#8992A1",
 }
 
-KPI_DOT_COLORS = {
-    "accent": "#2E3F73",
-    "success": "#027A48",
-    "warning": "#B54708",
-    "danger": "#B42318",
+ACCENT_COLORS = {
+    "brand": "#14515E",
+    "success": "#15633F",
+    "warning": "#8A5A0B",
+    "danger": "#9A2E2E",
 }
 
 
-def _kpi_card(label: str, value: str, caption: str, dot: str = "accent") -> None:
-    color = KPI_DOT_COLORS.get(dot, KPI_DOT_COLORS["accent"])
+def _kpi_card(label: str, value: str, caption: str, accent: str = "brand") -> None:
+    color = ACCENT_COLORS.get(accent, ACCENT_COLORS["brand"])
     html = textwrap.dedent(
-        '<div class="crg-kpi-card">'
-        '<div class="crg-kpi-header">'
-        f'<span class="crg-kpi-dot" style="background:{color};"></span>'
-        f'<span class="crg-kpi-label">{label}</span>'
-        "</div>"
+        f'<div class="crg-kpi-card" style="--accent-color:{color};">'
+        f'<div class="crg-kpi-label">{label}</div>'
         f'<div class="crg-kpi-value">{value}</div>'
         f'<div class="crg-kpi-caption">{caption}</div>'
         "</div>"
@@ -64,6 +61,17 @@ def _section_header(title: str, meta: str = "") -> None:
     st.markdown(html, unsafe_allow_html=True)
 
 
+def _chart_layout(**overrides) -> dict:
+    base = dict(
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(family="IBM Plex Sans, sans-serif", color="#3D4351", size=12),
+        margin=dict(l=10, r=10, t=10, b=10),
+    )
+    base.update(overrides)
+    return base
+
+
 def render(engine) -> None:
     with engine.connect() as conn:
         state = get_pipeline_state(conn)
@@ -84,12 +92,7 @@ def render(engine) -> None:
     # --- KPI row -----------------------------------------------------
     cols = st.columns(4)
     with cols[0]:
-        _kpi_card(
-            "Current batch",
-            str(state["current_batch"]),
-            "pipeline clock position",
-            dot="accent",
-        )
+        _kpi_card("Current batch", str(state["current_batch"]), "pipeline clock position")
     with cols[1]:
         if latest_champion:
             promoted_at = str(latest_champion["promoted_at"])[:19].replace("T", " ")
@@ -100,7 +103,6 @@ def render(engine) -> None:
             "Production version",
             f'v{latest_champion["model_version"]}' if latest_champion else "none",
             caption,
-            dot="accent",
         )
     with cols[2]:
         value = f"{win_rate:.0%}" if win_rate is not None else "—"
@@ -109,7 +111,7 @@ def render(engine) -> None:
             if n_gate_evals
             else "no challengers evaluated yet"
         )
-        _kpi_card("Challenger win rate", value, caption, dot="success")
+        _kpi_card("Challenger win rate", value, caption, accent="success")
     with cols[3]:
         value = f"{rollback_rate:.0%}" if rollback_rate is not None else "—"
         caption = (
@@ -117,8 +119,8 @@ def render(engine) -> None:
             if n_promotions_total
             else "no promotions yet"
         )
-        dot = "danger" if (rollback_rate or 0) > 0 else "accent"
-        _kpi_card("Rollback rate", value, caption, dot=dot)
+        accent = "danger" if (rollback_rate or 0) > 0 else "brand"
+        _kpi_card("Rollback rate", value, caption, accent=accent)
 
     st.markdown('<div class="crg-divider"></div>', unsafe_allow_html=True)
 
@@ -129,21 +131,15 @@ def render(engine) -> None:
         metric_cols = st.columns(max(len(metrics_items), 1) + 1)
         for col, (metric, value) in zip(metric_cols, metrics_items):
             with col:
-                _kpi_card(
-                    metric.replace("_", " ").capitalize(),
-                    f"{value:.4f}",
-                    "on gated window",
-                    dot="accent",
-                )
+                _kpi_card(metric.replace("_", " ").capitalize(), f"{value:.4f}", "on gated window")
         with metric_cols[-1]:
-            status_label = "Reference stale" if latest_champion.get("reference_stale") else "Reference fresh"
-            status_dot = "warning" if latest_champion.get("reference_stale") else "success"
+            stale = bool(latest_champion.get("reference_stale"))
+            status_label = "Reference stale" if stale else "Reference fresh"
             _kpi_card(
                 "Rollback reference",
                 status_label,
-                "compared against live batches" if not latest_champion.get("reference_stale")
-                else "checks suppressed until re-baselined",
-                dot=status_dot,
+                "checks suppressed until re-baselined" if stale else "compared against live batches",
+                accent="warning" if stale else "success",
             )
     else:
         _empty(
@@ -170,10 +166,10 @@ def render(engine) -> None:
                 y=ys,
                 mode="lines+markers",
                 name=metric_name,
-                line=dict(color="#2E3F73", width=2.5),
-                marker=dict(size=7, color="#2E3F73"),
+                line=dict(color="#14515E", width=2.5),
+                marker=dict(size=7, color="#14515E"),
                 fill="tozeroy",
-                fillcolor="rgba(46, 63, 115, 0.06)",
+                fillcolor="rgba(20, 81, 94, 0.07)",
                 text=hover_versions,
                 hovertemplate="%{text}<br>" + metric_name + ": %{y:.4f}<extra></extra>",
             )
@@ -185,20 +181,18 @@ def render(engine) -> None:
                     y=rolled_back_ys,
                     mode="markers",
                     name="rolled back",
-                    marker=dict(color="#B42318", size=11, symbol="x", line=dict(width=2)),
+                    marker=dict(color="#9A2E2E", size=11, symbol="x", line=dict(width=2)),
                     hovertemplate="rolled back<br>" + metric_name + ": %{y:.4f}<extra></extra>",
                 )
             )
         fig.update_layout(
-            paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(0,0,0,0)",
-            font=dict(family="Inter, sans-serif", color="#475467", size=12),
-            margin=dict(l=10, r=10, t=10, b=10),
-            height=300,
-            xaxis=dict(title="promotion #", showgrid=False, dtick=1),
-            yaxis=dict(title=metric_name, showgrid=True, gridcolor="#EEF1F5", zeroline=False),
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-            hovermode="closest",
+            **_chart_layout(
+                height=300,
+                xaxis=dict(title="promotion #", showgrid=False, dtick=1),
+                yaxis=dict(title=metric_name, showgrid=True, gridcolor="#EEF0F3", zeroline=False),
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                hovermode="closest",
+            )
         )
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
     else:
@@ -229,7 +223,7 @@ def render(engine) -> None:
                 '<div class="crg-funnel-row-label"><span>Rejected</span>'
                 f'<span class="crg-funnel-row-count">{n_gate_rejections} &middot; {rejected_pct:.0f}%</span></div>'
                 '<div class="crg-funnel-track">'
-                f'<div class="crg-funnel-fill" style="width:{rejected_pct:.1f}%;background:var(--border-strong);"></div>'
+                f'<div class="crg-funnel-fill" style="width:{rejected_pct:.1f}%;background:var(--line-strong);"></div>'
                 "</div></div>"
                 "</div>"
             ).strip()
@@ -248,7 +242,7 @@ def render(engine) -> None:
         else:
             labels = sorted(event_counts, key=lambda k: event_counts[k])
             values = [event_counts[k] for k in labels]
-            bar_colors = [EVENT_COLORS.get(k, "#2E3F73") for k in labels]
+            bar_colors = [EVENT_COLORS.get(k, "#14515E") for k in labels]
 
             fig = go.Figure(
                 data=[
@@ -264,15 +258,12 @@ def render(engine) -> None:
                 ]
             )
             fig.update_layout(
-                paper_bgcolor="rgba(0,0,0,0)",
-                plot_bgcolor="rgba(0,0,0,0)",
-                font=dict(family="Inter, sans-serif", color="#475467", size=12),
-                margin=dict(l=10, r=24, t=6, b=10),
-                height=280,
-                xaxis=dict(showgrid=False, zeroline=False, visible=False),
-                yaxis=dict(showgrid=False, tickfont=dict(size=11, family="JetBrains Mono")),
-                showlegend=False,
+                **_chart_layout(
+                    margin=dict(l=10, r=24, t=6, b=10),
+                    height=280,
+                    xaxis=dict(showgrid=False, zeroline=False, visible=False),
+                    yaxis=dict(showgrid=False, tickfont=dict(size=11, family="IBM Plex Mono")),
+                    showlegend=False,
+                )
             )
             st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
-
-

@@ -34,7 +34,7 @@ CREATE TABLE IF NOT EXISTS champion_history (
     id                      BIGSERIAL PRIMARY KEY,
     model_version           TEXT NOT NULL,
     promoted_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
-    holdout_metrics         JSONB NOT NULL,
+    holdout_metrics         JSONB NOT NULL,   -- metrics on the frozen, never-drifted holdout
     window_metrics          JSONB NOT NULL,   -- metrics on the drifted window it was gated against
     drift_fingerprint        JSONB NOT NULL,   -- Evidently report at promotion time
     reference_stale          BOOLEAN NOT NULL DEFAULT FALSE,
@@ -59,6 +59,3 @@ CREATE INDEX IF NOT EXISTS idx_audit_log_created ON audit_log (created_at);
 INSERT INTO pipeline_state (id, current_batch, version)
 VALUES (1, 0, 0)
 ON CONFLICT (id) DO NOTHING;
-
-
-

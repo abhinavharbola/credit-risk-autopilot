@@ -33,7 +33,3 @@ with mlflow.start_run(run_name="smoke-test") as run:
     print(f"run created successfully: {run.info.run_id}")
 
 print("MLflow connectivity OK")
-
-
-
-

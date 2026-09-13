@@ -41,26 +41,31 @@ def test_find_previous_champion_returns_none_when_no_valid_candidate():
 def test_fingerprint_staleness_flags_large_drift_share_delta():
     then = {"drift_share": 0.1, "column_drift_scores": {}}
     now = {"drift_share": 0.5, "column_drift_scores": {}}
-    assert check_fingerprint_staleness(then, now, threshold=0.1) is True
+    assert check_fingerprint_staleness(
+        then, now, drift_share_delta_threshold=0.1, column_pvalue_delta_threshold=0.1
+    ) is True
 
 
 def test_fingerprint_staleness_false_within_threshold():
     then = {"drift_share": 0.2, "column_drift_scores": {"DebtRatio": 0.3}}
     now = {"drift_share": 0.22, "column_drift_scores": {"DebtRatio": 0.32}}
-    assert check_fingerprint_staleness(then, now, threshold=0.1) is False
+    assert check_fingerprint_staleness(
+        then, now, drift_share_delta_threshold=0.1, column_pvalue_delta_threshold=0.1
+    ) is False
 
 
 def test_fingerprint_staleness_flags_large_column_score_delta_even_if_share_stable():
     then = {"drift_share": 0.2, "column_drift_scores": {"DebtRatio": 0.1}}
     now = {"drift_share": 0.21, "column_drift_scores": {"DebtRatio": 0.8}}
-    assert check_fingerprint_staleness(then, now, threshold=0.1) is True
+    assert check_fingerprint_staleness(
+        then, now, drift_share_delta_threshold=0.1, column_pvalue_delta_threshold=0.1
+    ) is True
 
 
 def test_fingerprint_staleness_handles_no_shared_columns():
     then = {"drift_share": 0.1, "column_drift_scores": {"DebtRatio": 0.1}}
     now = {"drift_share": 0.11, "column_drift_scores": {"MonthlyIncome": 0.9}}
     # no shared columns to compare, falls back to drift_share only, which is within threshold
-    assert check_fingerprint_staleness(then, now, threshold=0.1) is False
-
-
-
+    assert check_fingerprint_staleness(
+        then, now, drift_share_delta_threshold=0.1, column_pvalue_delta_threshold=0.1
+    ) is False

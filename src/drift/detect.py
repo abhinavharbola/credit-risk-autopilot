@@ -98,6 +98,16 @@ def _reduce_to_fingerprint(raw: dict[str, Any]) -> dict[str, Any]:
     return {"drift_share": drift_share, "column_drift_scores": column_p_values}
 
 
+class DriftFingerprintError(RuntimeError):
+    """Raised when compute_fingerprint's output doesn't have a usable
+    drift_share. This used to fail silently (drift_share stayed None,
+    check_retrain_trigger just treated that as "not triggered") - which is
+    exactly how a schema mismatch against a future Evidently version could
+    disable retraining for an entire run with no error anywhere. Governance
+    decisions should fail loud, not fail open.
+    """
+
+
 def check_retrain_trigger(
     current_batch: pd.DataFrame,
     reference_df: pd.DataFrame,
@@ -106,29 +116,44 @@ def check_retrain_trigger(
     """Retrain trigger: has the current batch drifted meaningfully from the
     training reference? Reuses compute_fingerprint so the retrain trigger and
     the rollback-reference fingerprint check are always computed identically.
+
+    Raises DriftFingerprintError if drift_share couldn't be extracted, rather
+    than silently treating an unreadable report as "no drift" (see 0.7.21
+    regression this project already hit once, pinned as a fixture in
+    tests/test_drift_detect.py).
     """
     fingerprint = compute_fingerprint(current_batch, reference_df)
-    triggered = (
-        fingerprint["drift_share"] is not None
-        and fingerprint["drift_share"] >= drift_share_threshold
-    )
+    if fingerprint["drift_share"] is None:
+        raise DriftFingerprintError(
+            "compute_fingerprint returned drift_share=None - Evidently's "
+            "report shape has likely changed and _reduce_to_fingerprint no "
+            "longer matches it. Refusing to silently treat this as "
+            "'no drift'; see src/drift/detect.py docstring."
+        )
+    triggered = fingerprint["drift_share"] >= drift_share_threshold
     return triggered, fingerprint
 
 
 def check_fingerprint_staleness(
     fingerprint_at_promotion: dict[str, Any],
     fingerprint_now: dict[str, Any],
-    threshold: float,
+    drift_share_delta_threshold: float,
+    column_pvalue_delta_threshold: float,
 ) -> bool:
     """4.1 fix: the stored rollback reference can itself go stale (e.g. the
     temporary concept-drift window active at promotion time ends and
     reverts). Compares two fingerprints computed against the same canonical
     reference; if they've materially diverged, the stored window is no
     longer representative of live traffic.
+
+    Takes two separate thresholds (previously a single shared value): the
+    aggregate drift_share delta and the per-column p-value delta are
+    different units answering different questions, and tuning one used to
+    silently move the other.
     """
     share_then = fingerprint_at_promotion.get("drift_share") or 0.0
     share_now = fingerprint_now.get("drift_share") or 0.0
-    if abs(share_now - share_then) > threshold:
+    if abs(share_now - share_then) > drift_share_delta_threshold:
         return True
 
     scores_then = fingerprint_at_promotion.get("column_drift_scores", {})
@@ -138,7 +163,4 @@ def check_fingerprint_staleness(
         return False
 
     max_col_delta = max(abs(scores_now[c] - scores_then[c]) for c in shared_cols)
-    return max_col_delta > threshold
-
-
-
+    return max_col_delta > column_pvalue_delta_threshold

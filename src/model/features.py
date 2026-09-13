@@ -21,6 +21,3 @@ FEATURES = [
 IMPUTE_COLUMNS = ["MonthlyIncome", "NumberOfDependents"]
 
 ALL_COLUMNS = [TARGET] + FEATURES
-
-
-

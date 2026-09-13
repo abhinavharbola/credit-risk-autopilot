@@ -21,8 +21,6 @@ def _delta_badge(delta: float, unit: str) -> str:
 
 
 def render(engine) -> None:
-    st.markdown('<div class="crg-section-title">Champion lineage</div>', unsafe_allow_html=True)
-
     with engine.connect() as conn:
         history = get_champion_history(conn)
 
@@ -95,5 +93,3 @@ def render(engine) -> None:
         f'<div class="crg-timeline">{"".join(items_html)}</div>'
     ).strip()
     st.markdown(full_html, unsafe_allow_html=True)
-
-

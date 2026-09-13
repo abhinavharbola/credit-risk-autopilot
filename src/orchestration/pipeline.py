@@ -206,6 +206,7 @@ def run_tick(
     raw_batches: list[pd.DataFrame],
     training_pool_df: pd.DataFrame,
     config: dict[str, Any],
+    holdout_df: pd.DataFrame,
 ) -> dict[str, Any]:
     """Runs the full governance loop for one simulated batch:
     score -> release due labels -> drift check -> conditional retrain+gate
@@ -217,6 +218,13 @@ def run_tick(
     (batch_index, config), so recomputing it later for the due batch
     reproduces byte-identical output to what was actually scored at the time
     - no need to persist a separate "already drifted" copy per batch.
+
+    holdout_df is the frozen, never-drifted holdout carved out in
+    src/data/split.py. It is undrifted by construction, so it's scored as-is
+    (no inject_drift call) and used only for holdout_metrics at promotion
+    time - never for the gate or the rollback reference, both of which must
+    compare against the drifted live window instead (see README's "rollback
+    must reference the drifted window" design note).
     """
     production_model, production_version = _production_cache.get()
 
@@ -235,7 +243,7 @@ def run_tick(
     result: dict[str, Any] = {"batch": current_batch}
 
     triggered, fingerprint = check_retrain_trigger(
-        batch_df, training_pool_df, config["gate"]["reference_fingerprint_drift_threshold"]
+        batch_df, training_pool_df, config["gate"]["retrain_drift_share_threshold"]
     )
     write_audit_log(
         conn,
@@ -269,8 +277,23 @@ def run_tick(
                 window_metrics = {
                     config["gate"]["primary_metric"]: gate_outcome["gate_result"].challenger_metric
                 }
-                # holdout eval wired in when live infra is available
-                holdout_metrics = window_metrics
+                # Real holdout evaluation, not a copy of window_metrics: the
+                # challenger is scored on the frozen, never-drifted holdout
+                # so champion_history.holdout_metrics reflects an actual
+                # holdout number, distinct from window_metrics (the drifted
+                # window it was gated against). Conflating the two used to
+                # mean holdout_metrics was just window_metrics under a
+                # different key post-bootstrap.
+                holdout_prob = score_model(
+                    gate_outcome["challenger_model"], holdout_df
+                )
+                holdout_metric_value = compute_metric(
+                    holdout_df[TARGET].to_numpy(),
+                    holdout_prob,
+                    config["gate"]["primary_metric"],
+                    config["gate"]["decision_threshold"],
+                )
+                holdout_metrics = {config["gate"]["primary_metric"]: holdout_metric_value}
                 champion_history_id = promote_challenger(
                     conn,
                     gate_outcome["challenger_version"],
@@ -309,12 +332,11 @@ def run_tick(
             config["gate"]["primary_metric"],
             config["gate"]["decision_threshold"],
             config["gate"]["rollback_metric_drop_threshold"],
-            config["gate"]["reference_fingerprint_drift_threshold"],
+            config["gate"]["staleness_drift_share_delta_threshold"],
+            config["gate"]["staleness_column_pvalue_delta_threshold"],
             bootstrap_resamples=config["gate"]["bootstrap_resamples"],
             significance_alpha=config["gate"]["significance_alpha"],
         )
         result["rollback"] = rollback_result
 
     return result
-
-

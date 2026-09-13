@@ -119,6 +119,3 @@ def test_inject_drift_combines_persistent_and_temporary_in_overlap_window():
 
     persistent_only = apply_persistent_drift(batch, 17, PARAMS)
     assert not out.equals(persistent_only)  # temporary drift added more change
-
-
-

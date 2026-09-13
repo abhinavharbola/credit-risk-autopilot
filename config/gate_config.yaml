@@ -27,8 +27,8 @@ bootstrap_resamples: 2000
 rollback_metric_drop_threshold: 0.03
 
 # Evidently drift share (fraction of the 10 features individually flagged
-# drifted, each at K-S p<0.05) - used for both the retrain trigger and the
-# 4.1 rollback-reference staleness check.
+# drifted, each at K-S p<0.05). Used ONLY for the retrain trigger: is the
+# live batch itself drifted against the training reference.
 #
 # 0.1 (1 of 10 columns) is too low: with 10 independent per-column tests at
 # alpha=0.05 and no multiple-testing correction, P(at least one column
@@ -37,7 +37,20 @@ rollback_metric_drop_threshold: 0.03
 # P(X>=3) with n=10, p=0.05), while still reliably catching real injected
 # drift: persistent drift alone touches 3 columns, the concept-drift window
 # touches 5.
-reference_fingerprint_drift_threshold: 0.3
+retrain_drift_share_threshold: 0.3
 
+# 4.1 rollback-reference staleness check: how much the stored reference
+# window's overall drift_share is allowed to move away from live traffic's
+# drift_share before the reference is considered no longer apples-to-apples
+# and the rollback comparison is suppressed. Same numeric default as the
+# retrain threshold above (both operate on drift_share, so 0.3 is a
+# reasonable starting point for either), but kept as an independent key -
+# this is a level-vs-level question, not "is the batch drifted."
+staleness_drift_share_delta_threshold: 0.3
 
-
+# Same staleness check, but on individual column K-S p-values rather than
+# the aggregate drift_share. This is a different unit (a p-value delta, not
+# a share of columns) and was previously conflated with the two thresholds
+# above under one shared config key - kept separate on purpose so tuning
+# one never silently changes the others.
+staleness_column_pvalue_delta_threshold: 0.3

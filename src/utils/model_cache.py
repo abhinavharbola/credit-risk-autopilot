@@ -49,6 +49,3 @@ class AliasedModelCache:
             self._version = version_info.version
 
         return self._model, self._version
-
-
-

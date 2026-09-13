@@ -89,6 +89,3 @@ if __name__ == "__main__":
     raw = load_raw()
     rate = confirm_positive_rate(raw)
     print(f"loaded {len(raw)} rows, positive rate {rate:.4f}")
-
-
-

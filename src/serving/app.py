@@ -97,5 +97,3 @@ def predict(request: PredictionRequest) -> PredictionResponse:
         predicted_label=int(prob >= _DECISION_THRESHOLD),
         model_version=version,
     )
-
-

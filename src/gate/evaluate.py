@@ -194,7 +194,13 @@ def evaluate_gate(
         significance_method = "mcnemar"
         significance_stat = chi2
         significance_pvalue = pvalue
-        passed_significance = passed_dominance and pvalue < alpha
+        # McNemar alone only tests "does disagreement direction differ from
+        # 50/50", not which side is doing the disagreeing - it can't tell
+        # dominance on its own. Dominance is checked once, explicitly, in
+        # `promote` below; it is intentionally not folded into
+        # passed_significance here so each gate answers exactly one
+        # question and the final AND is the single place they combine.
+        passed_significance = pvalue < alpha
     else:
         significance_method = "bootstrap"
         lower, upper = _bootstrap_delta_ci(
@@ -237,6 +243,3 @@ def evaluate_gate(
         reason=reason,
         details=details,
     )
-
-
-

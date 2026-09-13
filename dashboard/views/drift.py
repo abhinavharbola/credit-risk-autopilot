@@ -13,7 +13,7 @@ import streamlit as st
 from src.db.repository import get_audit_log
 from src.utils.config import load_yaml
 
-RETRAIN_THRESHOLD = load_yaml("config/gate_config.yaml")["reference_fingerprint_drift_threshold"]
+RETRAIN_THRESHOLD = load_yaml("config/gate_config.yaml")["retrain_drift_share_threshold"]
 
 
 def _stat_strip(items: list[tuple[str, str]]) -> None:
@@ -83,9 +83,9 @@ def render(engine) -> None:
             y=df["drift_share"],
             mode="lines",
             name="drift share",
-            line=dict(color="#2E3F73", width=2.5),
+            line=dict(color="#14515E", width=2.5),
             fill="tozeroy",
-            fillcolor="rgba(46, 63, 115, 0.08)",
+            fillcolor="rgba(20, 81, 94, 0.08)",
         )
     )
     fig.add_trace(
@@ -94,25 +94,25 @@ def render(engine) -> None:
             y=triggered_df["drift_share"],
             mode="markers",
             name="retrain triggered",
-            marker=dict(color="#B42318", size=9, line=dict(color="#FFFFFF", width=1.5)),
+            marker=dict(color="#9A2E2E", size=9, line=dict(color="#FFFFFF", width=1.5)),
         )
     )
     fig.add_hline(
         y=RETRAIN_THRESHOLD,
         line_dash="dash",
-        line_color="#98A2B3",
+        line_color="#8992A1",
         annotation_text=f"retrain threshold ({RETRAIN_THRESHOLD})",
         annotation_font_size=11,
-        annotation_font_color="#98A2B3",
+        annotation_font_color="#8992A1",
     )
     fig.update_layout(
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
-        font=dict(family="Inter, sans-serif", color="#475467", size=12),
+        font=dict(family="IBM Plex Sans, sans-serif", color="#3D4351", size=12),
         margin=dict(l=10, r=10, t=10, b=10),
         height=340,
         xaxis=dict(title="batch", showgrid=False),
-        yaxis=dict(title="drift share", showgrid=True, gridcolor="#EEF1F5", zeroline=False),
+        yaxis=dict(title="drift share", showgrid=True, gridcolor="#EEF0F3", zeroline=False),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         hovermode="x unified",
     )
@@ -125,5 +125,3 @@ def render(engine) -> None:
     st.markdown('<div class="crg-divider"></div>', unsafe_allow_html=True)
     st.markdown('<div class="crg-section-title">Raw drift checks</div>', unsafe_allow_html=True)
     st.dataframe(df, use_container_width=True, hide_index=True)
-
-

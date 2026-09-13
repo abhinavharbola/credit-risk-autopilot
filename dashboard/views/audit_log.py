@@ -61,8 +61,6 @@ def _summarize(event_type: str, payload: dict) -> str:
 
 
 def render(engine) -> None:
-    st.markdown('<div class="crg-section-title">Audit log</div>', unsafe_allow_html=True)
-
     selected = st.selectbox("Event type", EVENT_TYPES, label_visibility="collapsed")
     event_type = None if selected == "all" else selected
 
@@ -88,6 +86,3 @@ def render(engine) -> None:
             if st.button("Explain in plain language", key=f"explain-{e['id']}"):
                 with st.spinner("Asking the LLM..."):
                     st.write(explain_event(e["event_type"], e["event_payload"]))
-
-
-

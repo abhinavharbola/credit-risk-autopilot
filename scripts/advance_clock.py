@@ -21,6 +21,7 @@ configure_logging()
 
 RAW_BATCHES_PATH = Path("data/processed/pretrain_batches.pkl")
 TRAINING_POOL_PATH = Path("data/processed/training_pool.pkl")
+HOLDOUT_PATH = Path("data/processed/holdout.pkl")
 
 
 def load_pickled(path: Path):
@@ -42,10 +43,11 @@ def build_config() -> dict:
 def main() -> int:
     raw_batches = load_pickled(RAW_BATCHES_PATH)
     training_pool_df = load_pickled(TRAINING_POOL_PATH)
+    holdout_df = load_pickled(HOLDOUT_PATH)
     config = build_config()
 
     with get_connection() as conn:
-        result = claim_and_run_tick(conn, raw_batches, training_pool_df, config)
+        result = claim_and_run_tick(conn, raw_batches, training_pool_df, config, holdout_df)
 
     if result is None:
         print("tick already claimed by another caller, no work done")
@@ -57,6 +59,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
-
-
-

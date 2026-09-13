@@ -142,11 +142,11 @@ def bootstrap_champion(train_pool_df, holdout_df, gate_config: dict) -> None:
     print(f"bootstrap champion promoted: version {version}, holdout AUC-PR {holdout_metric:.4f}")
 
 
-def run_ticks(batches, train_pool_df, config: dict, n_ticks: int) -> list[dict]:
+def run_ticks(batches, train_pool_df, holdout_df, config: dict, n_ticks: int) -> list[dict]:
     summary = []
     for i in range(n_ticks):
         with get_connection() as conn:
-            result = claim_and_run_tick(conn, batches, train_pool_df, config)
+            result = claim_and_run_tick(conn, batches, train_pool_df, config, holdout_df)
 
         if result is None:
             print(f"tick {i}: claim lost to another caller, skipping")
@@ -187,13 +187,10 @@ def main() -> int:
 
     batches, train_pool_df, holdout_df = prepare_data()
     bootstrap_champion(train_pool_df, holdout_df, gate_config)
-    summary = run_ticks(batches, train_pool_df, config, n_ticks=N_TICKS)
+    summary = run_ticks(batches, train_pool_df, holdout_df, config, n_ticks=N_TICKS)
     print_summary(summary)
     return 0
 
 
 if __name__ == "__main__":
     sys.exit(main())
-
-
-

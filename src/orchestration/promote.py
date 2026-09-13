@@ -94,7 +94,8 @@ def check_rollback(
     metric_name: str,
     decision_threshold: float,
     drop_threshold: float,
-    fingerprint_drift_threshold: float,
+    staleness_drift_share_delta_threshold: float,
+    staleness_column_pvalue_delta_threshold: float,
     bootstrap_resamples: int = 2000,
     significance_alpha: float = 0.05,
     seed: int = 42,
@@ -140,7 +141,10 @@ def check_rollback(
 
     live_fingerprint = compute_fingerprint(live_batch_df, training_pool_df)
     is_stale = check_fingerprint_staleness(
-        current["drift_fingerprint"], live_fingerprint, fingerprint_drift_threshold
+        current["drift_fingerprint"],
+        live_fingerprint,
+        staleness_drift_share_delta_threshold,
+        staleness_column_pvalue_delta_threshold,
     )
 
     if is_stale:
@@ -229,6 +233,3 @@ def check_rollback(
         "reference_stale": False,
         "drop": drop,
     }
-
-
-

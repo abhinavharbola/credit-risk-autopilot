@@ -86,6 +86,3 @@ def inject_drift(batch_df: pd.DataFrame, batch_index: int, params: dict) -> pd.D
     out = apply_persistent_drift(batch_df, batch_index, params)
     out = apply_temporary_concept_drift(out, batch_index, params)
     return out
-
-
-

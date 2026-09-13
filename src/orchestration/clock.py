@@ -23,6 +23,7 @@ def claim_and_run_tick(
     raw_batches: list[pd.DataFrame],
     training_pool_df: pd.DataFrame,
     config: dict[str, Any],
+    holdout_df: pd.DataFrame,
 ) -> dict[str, Any] | None:
     state = get_pipeline_state(conn)
     expected_version = state["version"]
@@ -39,7 +40,4 @@ def claim_and_run_tick(
     if not claimed:
         return None  # another caller already claimed this tick
 
-    return run_tick(conn, current_batch, raw_batches, training_pool_df, config)
-
-
-
+    return run_tick(conn, current_batch, raw_batches, training_pool_df, config, holdout_df)

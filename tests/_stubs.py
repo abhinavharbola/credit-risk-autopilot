@@ -48,6 +48,3 @@ _stub(
 _stub("sqlalchemy", text=lambda s: s)
 _stub("sqlalchemy.engine", Connection=object)
 _stub("dotenv", load_dotenv=lambda *a, **k: None)
-
-
-
