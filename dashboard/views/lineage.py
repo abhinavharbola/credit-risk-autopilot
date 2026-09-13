@@ -14,7 +14,7 @@ from src.db.repository import get_champion_history
 
 def _delta_badge(delta: float, unit: str) -> str:
     if abs(delta) < 1e-6:
-        return f'<span class="crg-timeline-delta flat">flat vs previous</span>'
+        return '<span class="crg-timeline-delta flat">flat vs previous</span>'
     direction = "up" if delta > 0 else "down"
     sign = "+" if delta > 0 else ""
     return f'<span class="crg-timeline-delta {direction}">{sign}{delta:.4f} {unit} vs previous</span>'
