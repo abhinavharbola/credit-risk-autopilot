@@ -58,7 +58,7 @@ Every branch writes to `audit_log`. The gate's rejection reason and the rollback
 | Primary metric | AUC-PR | Accuracy is close to meaningless at ~6.7% positive rate. |
 | Tolerance band | 0.01 | Challenger must not fall meaningfully below champion before anything else is considered. |
 | Dominance | challenger > champion | A tie within tolerance is not promoted; genuine improvement is required. |
-| Significance | McNemar (paired, matched batch) or bootstrap CI when discordant pairs < 15 | With ~200 rows and ~13 positives per batch, McNemar is frequently underpowered; the bootstrap fallback exists specifically for that case, not as an afterthought. |
+| Significance | Bootstrap CI on the primary metric's delta, matched batch, unconditionally | Directly tests whether AUC-PR (the metric tolerance/dominance decide on) moved by more than noise, at any sample size. Previously routed through McNemar's test on 0.5-threshold hard-label agreement whenever a batch had >=15 discordant pairs - a different statistic than the one being promoted/rejected on. McNemar is still computed and reported as a diagnostic in `audit_log`, it just no longer decides the outcome. |
 | Drift share threshold | 0.3 (3+ of 10 features individually flagged) | At 0.1, one spuriously-flagged feature out of 10 independent K-S tests (alpha=0.05, no correction) triggers a false retrain on ~40% of undrifted batches. 0.3 drops that to ~1% while still reliably catching real injected drift (3-5 features affected). |
 | Rollback drop threshold | 0.03 AUC-PR, bootstrap-CI-confirmed | A raw point-estimate threshold on one ~200-row batch swings on sampling noise alone; the CI's upper bound must still clear the threshold, not just the single estimate. |
 | Delayed labels | 3 batches | Simulates realistic label latency; nothing is evaluated against ground truth that wouldn't actually be available yet. |
@@ -80,6 +80,10 @@ Documenting these because they were the actual hard part, not the initial build:
 - **Split before fitting.** Imputation medians were initially fit before the holdout split, leaking holdout information into training. The split now happens first, with medians fit only on the training pool.
 
 - **Never store the answer with the features.** Scoring wrote the full row, including the true label, into features, violating the delayed-label assumption and creating a future leakage path. Only actual model input columns are now stored.
+
+- **The significance test has to test the same metric the gate is deciding on.** Significance used to route through McNemar's test (paired hard-label agreement at `decision_threshold`) whenever a batch had enough discordant pairs, and only fell back to a bootstrap CI on the AUC-PR delta below that count. McNemar and AUC-PR answer different statistical questions - a challenger could pass one and fail the other for reasons unrelated to real generalization. Significance is now always the bootstrap CI directly on the primary metric's delta; McNemar is still computed and logged as a diagnostic, it just no longer decides `passed_significance`.
+
+- **A rollback check can't be run against the window it was just derived from.** Right after a promotion, the new champion and the window it was gated against are the same model scored on the same rows the stored `window_metrics` came from - an ordinary rollback comparison there is a no-op by construction (~zero drop, identical fingerprint) that would still get logged as if a real degradation check had run. `run_tick` now skips `check_rollback` explicitly on the tick it promotes and writes an honestly-labeled `skipped` audit entry instead.
 
 ## Data and drift simulation
 
@@ -126,7 +130,7 @@ credit-risk-autopilot/
 │   ├── run_demo_loop.py        # full bootstrap -> drift -> retrain -> promote -> rollback run
 │   └── smoke_test_mlflow.py    # fast connectivity check before a full run
 │
-├── tests/                      # 54 tests
+├── tests/                      # 57 tests
 │
 ├── .github/workflows/
 │   ├── ci.yml                  # lint + test on push/PR
@@ -237,7 +241,7 @@ A full 25-batch run takes roughly 5-15 minutes, dominated by MLflow round trips 
 
 ## Testing
 
-54 tests across 8 files, all pure-logic or mocked, no live infrastructure required to run them. The gate (`test_gate.py`) is the most heavily tested module: tolerance-band rejection, dominance rejection, McNemar-vs-bootstrap routing at the discordant-pair threshold, and, specifically, a fixed-seed reproduction of a challenger that looks better purely from small-sample noise, which the gate must reject.
+57 tests across 8 files, all pure-logic or mocked, no live infrastructure required to run them. The gate (`test_gate.py`) is the most heavily tested module: tolerance-band rejection, dominance rejection, the bootstrap significance check at every discordant-pair count (with McNemar's diagnostic reliability flag verified separately from what actually gates promotion), and, specifically, a fixed-seed reproduction of a challenger that looks better purely from small-sample noise, which the gate must reject. `test_pipeline.py` also covers `run_tick` end-to-end with everything external mocked: a promoting tick must skip `check_rollback` and log an explicit `skipped` audit entry, a non-promoting tick must still run the real rollback check.
 
 `tests/test_drift_detect.py` pins a real captured `evidently==0.7.21` output as a regression fixture: an earlier version of the fingerprint extraction silently matched on a key that didn't exist in the real schema and returned `drift_share=None` on every call, so retrain never triggered across a full 25-tick run despite real, measurable drift. That specific payload is now a permanent test case.
 
@@ -248,7 +252,8 @@ ruff check src tests scripts dashboard
 
 ## Known limitations
 
-- **McNemar is frequently underpowered at this batch size.** ~200 rows and ~13 positives per batch rarely produces the 15+ discordant pairs McNemar needs; the bootstrap CI fallback is the common path, not the exception. This is by design, not an oversight, but it means the significance check is often working with limited statistical power.
+- **McNemar is a diagnostic only, and is frequently unreliable as one at this batch size.** ~200 rows and ~13 positives per batch rarely produces the 15+ discordant pairs McNemar needs to have real power; `details["mcnemar_reliable"]` reflects that directly rather than silently trusting an underpowered number. It no longer decides promotion either way, only the bootstrap CI on the primary metric's delta does.
+- **The concept-drift blend target is computed per batch, not from a fixed reference point.** `apply_temporary_concept_drift` blends delinquent rows toward *that batch's own* non-delinquent mean, not a fixed global centroid. At 200 rows that's mostly noise around a stable quantity, but it does mean the injected "drift target" isn't perfectly fixed across batches the way the persistent-drift shift/scale is. Known, not treated as a bug: fixing it would mean threading a precomputed reference centroid through drift injection instead of recomputing it in-place, a real change worth making if this scenario needed to be more tightly controlled than a portfolio demo requires.
 - **The Evidently schema match is verified against one live capture (0.7.21)**, not guaranteed stable across versions.
 - **Rollback rarely has anywhere to revert to in a short run.** With only one or two promotions in a 25-batch demo, most rollback triggers find no valid prior champion and correctly do nothing beyond flagging. The underlying mechanism is exercised and tested (`find_previous_champion`, N-hop selection, staleness suppression), but a longer run with more promotions would exercise an actual reversion more directly.
 - **Model quality is not the point.** The challenger is a plain logistic regression on purpose; the governance loop around it, not the model itself, is the deliverable.
