@@ -21,7 +21,8 @@ MODEL_NAME = "credit-risk-classifier"
 
 _cache = AliasedModelCache(MODEL_NAME, "production")
 
-# Same decision_threshold the gate uses for McNemar/recall/precision
+# Same decision_threshold the gate uses for its McNemar diagnostic and for
+# recall/precision
 # (config/gate_config.yaml), not a hardcoded 0.5 - keeps predicted_label
 # here consistent with what governance actually classifies as positive,
 # even if the threshold is ever changed in config.

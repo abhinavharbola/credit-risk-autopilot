@@ -5,13 +5,31 @@ order step 4). Three gates, all must pass to promote a challenger:
   2. dominance       - challenger genuinely beats champion, not just a tie
                         within the tolerance band.
   3. significance    - that improvement is statistically distinguishable
-                        from noise: McNemar's test on matched champion/
-                        challenger predictions over the identical batch, or
-                        a bootstrap CI on the metric delta when there are
-                        too few discordant pairs to trust McNemar.
+                        from noise, tested with a paired bootstrap CI
+                        directly on the primary metric's delta (matched
+                        champion/challenger predictions over the identical
+                        batch).
 
 Primary metric is AUC-PR (documented in config/gate_config.yaml), not
 accuracy, since accuracy is close to useless at ~6.7% positive rate.
+
+Significance fix (metric-consistency): this used to route through McNemar's
+test (paired hard-label agreement at `decision_threshold`) whenever a batch
+had enough discordant pairs, falling back to a bootstrap CI on the metric
+delta only below that count. That tested two different statistical
+questions depending on the batch: McNemar asks whether 0.5-threshold
+classification agreement differs from 50/50, not whether the threshold-free
+ranking metric (AUC-PR) that tolerance/dominance actually decide on moved by
+a real amount. A challenger could clear McNemar on hard-label agreement
+while its AUC-PR delta was noise, or the reverse. The bootstrap CI on the
+metric delta answers the right question at any sample size (it's already
+what the low-discordant-pair fallback used), so it's now the only test that
+gates `passed_significance`, unconditionally. McNemar is still computed and
+reported under `details["mcnemar_*"]` as a secondary diagnostic (agreement
+between the two models' hard labels is still useful context for a reviewer),
+it just no longer decides promotion. `mcnemar_min_discordant_pairs` is kept
+in config as the threshold `details["mcnemar_reliable"]` is judged against,
+not as a routing switch.
 """
 
 from dataclasses import asdict, dataclass, field
@@ -187,31 +205,36 @@ def evaluate_gate(
     champion_correct = champion_pred == y_true
     challenger_correct = challenger_pred == y_true
 
-    chi2, pvalue, n_discordant = _mcnemar(champion_correct, challenger_correct)
-    details: dict[str, Any] = {"n_discordant_pairs": n_discordant, "n_samples": len(y_true)}
+    # McNemar is always computed, but purely as a diagnostic now (see the
+    # module docstring for why it no longer decides passed_significance):
+    # it's reported under details["mcnemar_*"] regardless of n_discordant,
+    # with mcnemar_reliable flagging whether this batch even had enough
+    # discordant pairs to trust it as a diagnostic in the first place.
+    mcnemar_chi2, mcnemar_pvalue, n_discordant = _mcnemar(champion_correct, challenger_correct)
 
-    if n_discordant >= min_discordant:
-        significance_method = "mcnemar"
-        significance_stat = chi2
-        significance_pvalue = pvalue
-        # McNemar alone only tests "does disagreement direction differ from
-        # 50/50", not which side is doing the disagreeing - it can't tell
-        # dominance on its own. Dominance is checked once, explicitly, in
-        # `promote` below; it is intentionally not folded into
-        # passed_significance here so each gate answers exactly one
-        # question and the final AND is the single place they combine.
-        passed_significance = pvalue < alpha
-    else:
-        significance_method = "bootstrap"
-        lower, upper = _bootstrap_delta_ci(
-            y_true, champion_prob, challenger_prob, metric, threshold,
-            n_resamples, seed, alpha,
-        )
-        significance_stat = None
-        significance_pvalue = None
-        passed_significance = lower > 0
-        details["bootstrap_ci_lower"] = lower
-        details["bootstrap_ci_upper"] = upper
+    # Significance is tested directly on the primary metric's delta via a
+    # paired bootstrap CI, unconditionally, so the same statistical question
+    # is asked at every sample size instead of switching questions (ranking
+    # metric vs. threshold-discretized hard-label agreement) depending on
+    # how many discordant pairs a given batch happens to have.
+    significance_method = "bootstrap"
+    lower, upper = _bootstrap_delta_ci(
+        y_true, champion_prob, challenger_prob, metric, threshold,
+        n_resamples, seed, alpha,
+    )
+    significance_stat = None
+    significance_pvalue = None
+    passed_significance = lower > 0
+
+    details: dict[str, Any] = {
+        "n_samples": len(y_true),
+        "bootstrap_ci_lower": lower,
+        "bootstrap_ci_upper": upper,
+        "mcnemar_chi2": mcnemar_chi2,
+        "mcnemar_pvalue": mcnemar_pvalue,
+        "mcnemar_n_discordant_pairs": n_discordant,
+        "mcnemar_reliable": n_discordant >= min_discordant,
+    }
 
     promote = passed_tolerance and passed_dominance and passed_significance
 
@@ -221,11 +244,14 @@ def evaluate_gate(
         reason = "challenger does not exceed champion (tie or worse within tolerance), rejected"
     elif not passed_significance:
         reason = (
-            f"improvement not statistically significant via {significance_method}, "
-            "likely noise, rejected"
+            f"improvement not statistically significant (bootstrap CI on the "
+            f"{metric} delta includes zero), likely noise, rejected"
         )
     else:
-        reason = f"challenger significantly beats champion via {significance_method}, promoted"
+        reason = (
+            f"challenger significantly beats champion (bootstrap CI on the "
+            f"{metric} delta), promoted"
+        )
 
     return GateResult(
         promote=promote,

@@ -47,9 +47,9 @@ def score_batch_with_production(
     cached load is reused instead of a second independent load per tick.
 
     decision_threshold comes from config/gate_config.yaml (the same value
-    the gate uses for McNemar/recall/precision) rather than a hardcoded 0.5,
-    so predicted_label always reflects whatever threshold governance is
-    actually configured with.
+    the gate uses for its McNemar diagnostic and for recall/precision)
+    rather than a hardcoded 0.5, so predicted_label always reflects whatever
+    threshold governance is actually configured with.
     """
     probs = score_model(model, batch_df)
     # FEATURES only, not the full row: batch_df still carries TARGET at this
@@ -261,6 +261,11 @@ def run_tick(
         release_due_labels(conn, due_batch_index, due_batch_df)
         result["labels_released_for_batch"] = due_batch_index
 
+        # Tracks whether this exact tick promoted a challenger, so the
+        # rollback check below can be skipped explicitly rather than run as
+        # a trivial no-op against itself (see the comment at that check).
+        promoted_this_tick = False
+
         if triggered:
             expanded_training_df = build_expanded_training_pool(conn, training_pool_df)
             gate_outcome = retrain_and_gate(
@@ -303,6 +308,7 @@ def run_tick(
                     training_pool_df,
                 )
                 result["promoted_champion_history_id"] = champion_history_id
+                promoted_this_tick = True
 
                 # A promotion just moved the @production alias in MLflow.
                 # production_model/production_version above were loaded at
@@ -315,28 +321,63 @@ def run_tick(
                 # aliased @production at this point in the tick.
                 production_model, production_version = _production_cache.get()
 
-        live_prob = score_model(production_model, due_batch_df)
-        live_metric_value = compute_metric(
-            due_batch_df[TARGET].to_numpy(),
-            live_prob,
-            config["gate"]["primary_metric"],
-            config["gate"]["decision_threshold"],
-        )
-        live_metrics = {config["gate"]["primary_metric"]: live_metric_value}
-        rollback_result = check_rollback(
-            conn,
-            due_batch_df,
-            live_prob,
-            live_metrics,
-            training_pool_df,
-            config["gate"]["primary_metric"],
-            config["gate"]["decision_threshold"],
-            config["gate"]["rollback_metric_drop_threshold"],
-            config["gate"]["staleness_drift_share_delta_threshold"],
-            config["gate"]["staleness_column_pvalue_delta_threshold"],
-            bootstrap_resamples=config["gate"]["bootstrap_resamples"],
-            significance_alpha=config["gate"]["significance_alpha"],
-        )
+        if promoted_this_tick:
+            # A promotion on this exact tick stored window_metrics computed
+            # on due_batch_df with the challenger that is now @production.
+            # Running check_rollback here would score that same model on
+            # that same due_batch_df again and compare the result against
+            # the window_metrics just derived from it - a comparison against
+            # itself, guaranteed to show ~zero drop and a fresh fingerprint
+            # every time. That's not wrong, but it's a redundant no-op
+            # dressed up as a real check, and logging it as an ordinary
+            # rollback_check with rollback_triggered=False makes the audit
+            # trail look like a real degradation check happened when it
+            # structurally couldn't have found anything. Skip it explicitly
+            # and say why, instead of letting it run and pass trivially.
+            skip_reason = (
+                "skipped: this tick promoted a challenger, live window is "
+                "the same window window_metrics was just computed from - "
+                "rollback comparison would be against itself"
+            )
+            write_audit_log(
+                conn,
+                event_type="rollback_check",
+                payload={
+                    "champion_history_id": result["promoted_champion_history_id"],
+                    "rollback_triggered": False,
+                    "skipped": True,
+                    "reason": skip_reason,
+                },
+            )
+            rollback_result = {
+                "rollback_triggered": False,
+                "rollback_executed": False,
+                "skipped": True,
+                "reason": skip_reason,
+            }
+        else:
+            live_prob = score_model(production_model, due_batch_df)
+            live_metric_value = compute_metric(
+                due_batch_df[TARGET].to_numpy(),
+                live_prob,
+                config["gate"]["primary_metric"],
+                config["gate"]["decision_threshold"],
+            )
+            live_metrics = {config["gate"]["primary_metric"]: live_metric_value}
+            rollback_result = check_rollback(
+                conn,
+                due_batch_df,
+                live_prob,
+                live_metrics,
+                training_pool_df,
+                config["gate"]["primary_metric"],
+                config["gate"]["decision_threshold"],
+                config["gate"]["rollback_metric_drop_threshold"],
+                config["gate"]["staleness_drift_share_delta_threshold"],
+                config["gate"]["staleness_column_pvalue_delta_threshold"],
+                bootstrap_resamples=config["gate"]["bootstrap_resamples"],
+                significance_alpha=config["gate"]["significance_alpha"],
+            )
         result["rollback"] = rollback_result
 
     return result

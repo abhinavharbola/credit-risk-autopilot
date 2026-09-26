@@ -119,7 +119,16 @@ def check_rollback(
          nothing to actually roll back to yet). Requires the CI's upper
          (optimistic) bound to still fall below the drop threshold, not
          just the single point estimate - the same rigor the promotion
-         gate already applies via McNemar/bootstrap on the other side.
+         gate already applies via its own bootstrap CI on the other side.
+
+    Note: check_rollback is deliberately not called at all on a tick that
+    just promoted a challenger (see src/orchestration/pipeline.py's run_tick)
+    - the newly-promoted model and the window it was gated against are the
+    same model scored on the same rows window_metrics was just computed
+    from, so a same-tick rollback comparison would be a no-op against
+    itself. That skip happens in the caller, not here, so this function can
+    stay a pure "given a live batch, is the current champion's reference
+    still trustworthy" check regardless of what just happened upstream.
 
     rollback_triggered vs rollback_executed: rollback_triggered means step 3's
     statistical test says the champion has genuinely degraded. It says nothing
