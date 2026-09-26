@@ -13,7 +13,7 @@ import numpy as np
 import pandas as pd
 
 from src.model.features import TARGET
-from src.orchestration.pipeline import retrain_and_gate
+from src.orchestration.pipeline import retrain_and_gate, run_tick
 
 
 def make_labeled_batch(n=100, seed=0):
@@ -231,3 +231,134 @@ def test_retrain_and_gate_can_actually_promote_when_pools_differ():
 
     assert outcome["gate_result"].promote is True
     assert outcome["gate_result"].champion_metric != outcome["gate_result"].challenger_metric
+
+
+def test_run_tick_skips_rollback_check_on_the_tick_it_promotes():
+    """Fix: right after a promotion, the newly-promoted challenger and the
+    window it was gated against are the same model scored on the same rows
+    check_rollback stored window_metrics from. Running the ordinary
+    rollback comparison there is a no-op dressed as a real check (~zero
+    drop, fresh fingerprint, by construction). run_tick must skip it and
+    write an explicit skipped rollback_check audit entry instead of calling
+    check_rollback at all on that tick.
+    """
+    batch_df = make_labeled_batch(n=400, seed=10)
+    holdout_df = make_labeled_batch(n=400, seed=11)
+    training_pool_df = make_labeled_batch(n=100, seed=12)
+    conn = MagicMock()
+
+    def fake_score(model, df):
+        y = df[TARGET].to_numpy()
+        if model == "champion_model":
+            return np.where(y == 1, 0.4, 0.4)  # champion: no separation
+        return np.where(y == 1, 0.9, 0.1)  # challenger: clear separation
+
+    config = {
+        "delayed_labels": {"delay_batches": 0},
+        "gate": {
+            **GATE_CONFIG,
+            "retrain_drift_share_threshold": 0.3,
+            "rollback_metric_drop_threshold": 0.03,
+            "staleness_drift_share_delta_threshold": 0.3,
+            "staleness_column_pvalue_delta_threshold": 0.3,
+        },
+    }
+
+    audit_calls = []
+
+    def fake_write_audit_log(conn, event_type, payload):
+        audit_calls.append({"event_type": event_type, "payload": payload})
+
+    with patch("src.orchestration.pipeline._production_cache") as mock_cache, \
+         patch("src.orchestration.pipeline.check_retrain_trigger") as mock_trigger, \
+         patch("src.orchestration.pipeline.release_due_labels"), \
+         patch(
+             "src.orchestration.pipeline.build_expanded_training_pool",
+             return_value=training_pool_df,
+         ), \
+         patch("src.orchestration.pipeline.train_challenger") as mock_train, \
+         patch("src.orchestration.pipeline.score_model", side_effect=fake_score), \
+         patch("src.orchestration.pipeline.promote_challenger", return_value=777) as mock_promote, \
+         patch("src.orchestration.pipeline.check_rollback") as mock_rollback, \
+         patch("src.orchestration.pipeline.write_audit_log", side_effect=fake_write_audit_log), \
+         patch("src.orchestration.pipeline.inject_drift", side_effect=lambda df, idx, cfg: df), \
+         patch("src.orchestration.pipeline.insert_predictions_bulk"):
+        mock_cache.get.return_value = ("champion_model", "v1")
+        mock_trigger.return_value = (True, {"drift_share": 0.5})
+        mock_train.return_value = ("run_x", "v2", MagicMock())
+
+        result = run_tick(
+            conn,
+            current_batch=0,
+            raw_batches=[batch_df],
+            training_pool_df=training_pool_df,
+            config=config,
+            holdout_df=holdout_df,
+        )
+
+    assert result["promoted_champion_history_id"] == 777
+    mock_promote.assert_called_once()
+
+    # the real rollback check must never run on this tick
+    mock_rollback.assert_not_called()
+
+    # an explicit, honestly-labeled skip must be recorded instead
+    assert result["rollback"]["skipped"] is True
+    assert result["rollback"]["rollback_triggered"] is False
+    assert result["rollback"]["rollback_executed"] is False
+
+    rollback_audit_entries = [c for c in audit_calls if c["event_type"] == "rollback_check"]
+    assert len(rollback_audit_entries) == 1
+    assert rollback_audit_entries[0]["payload"]["skipped"] is True
+    assert rollback_audit_entries[0]["payload"]["champion_history_id"] == 777
+
+
+def test_run_tick_runs_real_rollback_check_when_nothing_promoted_this_tick():
+    """Contrast case: when the gate rejects (or retrain wasn't triggered at
+    all), check_rollback must still run normally - the skip only applies to
+    the tick that actually promoted something.
+    """
+    batch_df = make_labeled_batch(n=100, seed=20)
+    holdout_df = make_labeled_batch(n=100, seed=21)
+    training_pool_df = make_labeled_batch(n=100, seed=22)
+    conn = MagicMock()
+
+    config = {
+        "delayed_labels": {"delay_batches": 0},
+        "gate": {
+            **GATE_CONFIG,
+            "retrain_drift_share_threshold": 0.3,
+            "rollback_metric_drop_threshold": 0.03,
+            "staleness_drift_share_delta_threshold": 0.3,
+            "staleness_column_pvalue_delta_threshold": 0.3,
+        },
+    }
+
+    with patch("src.orchestration.pipeline._production_cache") as mock_cache, \
+         patch("src.orchestration.pipeline.check_retrain_trigger") as mock_trigger, \
+         patch("src.orchestration.pipeline.release_due_labels"), \
+         patch("src.orchestration.pipeline.score_model", return_value=np.full(100, 0.3)), \
+         patch("src.orchestration.pipeline.check_rollback") as mock_rollback, \
+         patch("src.orchestration.pipeline.write_audit_log"), \
+         patch("src.orchestration.pipeline.inject_drift", side_effect=lambda df, idx, cfg: df), \
+         patch("src.orchestration.pipeline.insert_predictions_bulk"):
+        mock_cache.get.return_value = ("champion_model", "v1")
+        mock_trigger.return_value = (False, {"drift_share": 0.0})  # no retrain this tick
+        mock_rollback.return_value = {
+            "rollback_triggered": False,
+            "rollback_executed": False,
+            "reference_stale": False,
+        }
+
+        result = run_tick(
+            conn,
+            current_batch=0,
+            raw_batches=[batch_df],
+            training_pool_df=training_pool_df,
+            config=config,
+            holdout_df=holdout_df,
+        )
+
+    assert "promoted_champion_history_id" not in result
+    mock_rollback.assert_called_once()
+    assert result["rollback"].get("skipped") is not True

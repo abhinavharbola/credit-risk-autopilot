@@ -11,15 +11,23 @@ decision_threshold: 0.5
 tolerance_band: 0.01
 
 # Significance check on matched champion/challenger predictions over the
-# identical newly-labeled batch: McNemar (paired) when there are enough
-# discordant pairs, a bootstrap CI on the metric delta otherwise (see
-# mcnemar_min_discordant_pairs below). This routing is fixed logic in
-# src/gate/evaluate.py, not a config choice - there is no key here to force
-# one method over the other.
+# identical newly-labeled batch: a paired bootstrap CI directly on the
+# primary_metric delta, unconditionally (src/gate/evaluate.py). This used to
+# route through McNemar's test (on 0.5-threshold hard-label agreement)
+# whenever a batch had enough discordant pairs, but McNemar and the primary
+# metric (AUC-PR, threshold-free) answer different statistical questions -
+# a challenger could pass one and fail the other for reasons that have
+# nothing to do with real generalization. The bootstrap CI on the metric
+# delta is now the only test that gates promotion, at every sample size.
 significance_alpha: 0.05
 
-# minimum discordant-pair count below which McNemar is considered underpowered
-# and the gate falls back to a bootstrap CI on the metric delta instead
+# McNemar is still computed every gate evaluation and reported under
+# details["mcnemar_*"] as a diagnostic (useful context: did the two models'
+# hard-label predictions actually diverge), but it no longer decides
+# passed_significance. This threshold is what details["mcnemar_reliable"]
+# is judged against - below it, McNemar's own diagnostic number shouldn't be
+# trusted either, since ~200 rows and ~13 positives per batch frequently
+# doesn't produce enough discordant pairs for McNemar to have real power.
 mcnemar_min_discordant_pairs: 15
 bootstrap_resamples: 2000
 

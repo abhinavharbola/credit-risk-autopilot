@@ -56,7 +56,6 @@ def test_rejects_challenger_that_looks_better_only_due_to_noisy_small_sample():
 
     result = evaluate_gate(y_true, champion_prob, challenger_prob, CONFIG, seed=0)
 
-    # n=15 batch, too few discordant pairs for McNemar
     assert result.significance_method == "bootstrap"
     assert result.passed_dominance is True  # looks better on point estimate
     assert result.passed_significance is False  # but not distinguishable from noise
@@ -82,12 +81,20 @@ def test_promotes_when_challenger_is_clearly_and_significantly_better():
     assert result.passed_dominance is True
     assert result.passed_significance is True
     assert result.promote is True
-    assert result.significance_method == "mcnemar"
-    assert result.significance_pvalue is not None
-    assert result.significance_pvalue < CONFIG["significance_alpha"]
+    # significance is always decided via the bootstrap CI on the primary
+    # metric's delta now, regardless of discordant-pair count - see
+    # src/gate/evaluate.py's module docstring for why McNemar was dropped
+    # as the routing/gating test.
+    assert result.significance_method == "bootstrap"
+    assert result.significance_pvalue is None
+    assert result.details["bootstrap_ci_lower"] > 0
+    # McNemar is still computed and reported as a diagnostic, just not used
+    # to decide passed_significance.
+    assert result.details["mcnemar_reliable"] is True
+    assert result.details["mcnemar_pvalue"] < CONFIG["significance_alpha"]
 
 
-def test_mcnemar_used_when_discordant_pairs_meet_minimum():
+def test_mcnemar_diagnostic_reported_when_discordant_pairs_meet_minimum():
     rng = np.random.default_rng(3)
     n = 200
     y_true = rng.choice([0, 1], size=n, p=[0.85, 0.15])
@@ -96,18 +103,21 @@ def test_mcnemar_used_when_discordant_pairs_meet_minimum():
 
     result = evaluate_gate(y_true, champion_prob, challenger_prob, CONFIG)
 
-    assert result.details["n_discordant_pairs"] >= CONFIG["mcnemar_min_discordant_pairs"]
-    assert result.significance_method == "mcnemar"
+    assert result.details["mcnemar_n_discordant_pairs"] >= CONFIG["mcnemar_min_discordant_pairs"]
+    assert result.details["mcnemar_reliable"] is True
+    # but significance is still decided by the bootstrap CI, not McNemar
+    assert result.significance_method == "bootstrap"
 
 
-def test_bootstrap_fallback_used_below_min_discordant_pairs():
+def test_mcnemar_diagnostic_flagged_unreliable_below_min_discordant_pairs():
     y_true = np.array([0, 1, 0, 1, 0])
     champion_prob = np.array([0.1, 0.9, 0.2, 0.3, 0.1])
     challenger_prob = np.array([0.1, 0.95, 0.2, 0.85, 0.1])
 
     result = evaluate_gate(y_true, champion_prob, challenger_prob, CONFIG)
 
-    assert result.details["n_discordant_pairs"] < CONFIG["mcnemar_min_discordant_pairs"]
+    assert result.details["mcnemar_n_discordant_pairs"] < CONFIG["mcnemar_min_discordant_pairs"]
+    assert result.details["mcnemar_reliable"] is False
     assert result.significance_method == "bootstrap"
     assert "bootstrap_ci_lower" in result.details
 
