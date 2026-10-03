@@ -2,16 +2,12 @@ name: Advance pipeline clock
 
 on:
   schedule:
-    - cron: "0 */6 * * *"  # every 6 hours; adjust to whatever cadence suits the demo
-  workflow_dispatch: {}  # manual trigger, same entrypoint as the schedule - no separate code path
+    - cron: "0 */3 * * *"
+  workflow_dispatch: {}
 
 jobs:
   advance:
     runs-on: ubuntu-latest
-    # concurrency guard is belt-and-suspenders: the real protection is the
-    # optimistic-concurrency claim in src/orchestration/clock.py (4.6a), this
-    # just avoids two overlapping cron runs burning CI minutes on a race
-    # that claim_and_run_tick would resolve into one no-op anyway.
     concurrency:
       group: pipeline-clock-advance
       cancel-in-progress: false
@@ -30,32 +26,17 @@ jobs:
         run: |
           if [ ! -d .dvc ]; then
             echo "::error::.dvc/ directory not found in this repo checkout."
-            echo ""
-            echo "This means 'dvc init' was never run and committed, so there is"
-            echo "no DVC remote configured and nothing for 'dvc pull' to pull -"
-            echo "it will fail with a generic 'not inside of a DVC repository'"
-            echo "error that doesn't explain any of this."
-            echo ""
-            echo "One-time local setup required (see README.md 'Getting started' step 5"
-            echo "for the full version and why - DagsHub's DVC remote needs an"
-            echo "endpointurl set separately, this is a common thing to miss):"
-            echo "  dvc init"
-            echo "  dvc remote add -d origin s3://dvc"
-            echo "  dvc remote default origin"
-            echo "  dvc remote modify origin endpointurl https://dagshub.com/<user>/<repo>.s3"
-            echo "  dvc remote modify origin --local access_key_id <dagshub-token>"
-            echo "  dvc remote modify origin --local secret_access_key <dagshub-token>"
-            echo "  dvc add data/processed/pretrain_batches.pkl data/processed/training_pool.pkl data/processed/holdout.pkl data/raw/cs-training.csv"
-            echo "  git add data/processed/*.dvc data/raw/*.dvc .dvc/config"
-            echo "  git commit -m 'Track data with DVC' && git push"
-            echo "  dvc push"
+            echo "See README.md 'Getting started' for the one-time DVC setup."
             exit 1
           fi
+          for f in data/processed/pretrain_batches.pkl.dvc data/processed/training_pool.pkl.dvc data/processed/holdout.pkl.dvc; do
+            if [ ! -f "$f" ]; then
+              echo "::error::$f is missing. Run scripts/run_demo_loop.py, then dvc add and commit the processed data."
+              exit 1
+            fi
+          done
           if [ -z "${{ secrets.DVC_ACCESS_KEY_ID }}" ] || [ -z "${{ secrets.DVC_SECRET_ACCESS_KEY }}" ]; then
             echo "::error::DVC_ACCESS_KEY_ID and/or DVC_SECRET_ACCESS_KEY repo secrets are not set."
-            echo "Add them under Settings -> Secrets and variables -> Actions."
-            echo "Values are both your DagsHub access token (same token for both secrets,"
-            echo "not a username/token pair)."
             exit 1
           fi
           echo "DVC setup looks complete, proceeding to pull."
@@ -63,10 +44,6 @@ jobs:
       - name: Pull versioned data
         run: dvc pull
         env:
-          # dvc-s3 is boto3-based; boto3's env var credential fallback only
-          # recognizes AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY, not arbitrary
-          # names. The GitHub secrets themselves can stay named DVC_*, this
-          # is just the env var mapping dvc pull actually needs to see.
           AWS_ACCESS_KEY_ID: ${{ secrets.DVC_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.DVC_SECRET_ACCESS_KEY }}
 

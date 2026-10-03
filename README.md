@@ -1,140 +1,162 @@
 # Continuous Credit Risk Governance Pipeline
 
-A self-governing ML pipeline that simulates a credit risk classifier's full production lifecycle: score a live batch, wait for delayed ground-truth labels, detect distribution drift, retrain a challenger, gate it against the current champion with a real significance test, for promotion or rejection, and roll back if the production model starts underperforming.
+A self-governing ML pipeline that simulates a credit risk classifier's production lifecycle: score live batches, wait for delayed labels, detect drift, retrain a challenger, gate it against the champion with a bootstrap significance test, promote or reject it, and roll back if the predecessor beats it on live data.
 
-Built as a portfolio project on entirely free-tier infrastructure: no paid APIs, no GPU, no local database server, to run without a human in loop.
+Built on free-tier infrastructure only: no paid APIs, no GPU, no local database server, and no human in the loop once scheduled.
 
 ## Preview
 
 <p align="center">
   <img src="assets/ui.png" width="720" alt="Line chart of drift share per batch with retrain-triggered batches called out, plus a raw drift-check table">
   <br>
-  <sub>Drift tab: per-batch drift share against the training reference.</sub>
+  <sub>Drift tab: per-batch drift share against the base training reference.</sub>
 </p>
 
 > Additional screenshots in [`assets/`](assets/), one per dashboard tab.
 
 ## What this is
 
-A model doesn't stay good just because it was good at launch. This project simulates the part of the ML lifecycle that usually gets hand-waved in a portfolio: what happens *after* deployment, when the world drifts and the model has to be watched, challenged, and sometimes replaced, automatically and defensibly.
+A model does not stay good just because it was good at launch. This project simulates what happens after deployment: the world drifts, and the model must be watched, challenged and sometimes replaced, automatically and defensibly.
 
-Given a frozen batch of applicants:
+On every clock tick the pipeline:
 
-1. Scores them with whatever model is currently aliased `@production`.
-2. Releases ground-truth labels for whichever earlier batch's delay window just elapsed.
-3. Checks the current batch for distribution drift against the original training reference (Evidently).
-4. If drift crosses threshold, retrains a challenger on an expanding pool of real labeled data and evaluates it against the champion through three gates: not meaningfully worse, genuinely better, and statistically significant, not just noise.
-5. Promotes the challenger only if all three gates pass, recording the drifted window it was gated against (not a stale holdout) as the reference for future rollback decisions.
-6. Checks whether the current champion has degraded enough, and significantly enough, to roll back to a prior version.
+1. Resets the `@production` alias in MLflow to the latest champion recorded in Postgres, then scores the current batch with it.
+2. Checks the batch for drift against the base training pool (Evidently, two-sample K-S test per feature).
+3. Releases ground-truth labels for the earlier batch whose delay has elapsed.
+4. If drift crosses the threshold and the retrain cooldown has elapsed, trains a challenger on a capped base sample plus recent labeled live rows, excluding the batch it will be judged on, and compares it to the champion on that batch.
+5. Promotes the challenger only if the bootstrap CI on the metric delta clears zero, storing the gated window's metric and drift fingerprint as a reference.
+6. Screens the champion for degradation against that reference and rolls back only if the previous champion is still significantly better on the same live batch than challenger.
 
-Every decision, promotions, rejections, drift checks, and rollback checks, is written to an audit log, not just the ones that changed something. The whole loop runs on a schedule via GitHub Actions, with no human triggering each tick.
+Every decision is written to an audit log, including drift checks, rejected challengers, rollback checks and alias reconciliations. The loop runs on a schedule via GitHub Actions.
 
 ## Architecture
 
 ```mermaid
 flowchart TD
-    clock[clock advance\noptimistic concurrency claim] --> score[score batch\n@production, cached model]
-    score --> release[release due labels\nPostgres, delay window elapsed]
-    release --> drift[drift check\nEvidently vs training reference]
-    drift -->|below threshold| rollback
-    drift -->|crosses threshold| retrain[retrain challenger\nexpanded + capped training pool]
-    retrain --> gate[gate: tolerance band\n+ dominance + significance]
-    gate -->|any gate fails| audit1[audit_log: gate_evaluation, rejected]
-    gate -->|all pass| promote[promote\nstore window metrics + drift fingerprint]
-    promote --> rollback[rollback check]
-    audit1 --> rollback
-    rollback -->|reference stale| suppress[suppress this cycle\nflag for re-baseline]
-    rollback -->|point estimate flagged| bootstrap[bootstrap CI on live batch]
-    bootstrap -->|CI confirms drop| revert[revert @production alias\nto prior non-rolled-back champion]
-    bootstrap -->|CI doesn't confirm| noop[no action]
+    clock[clock advance<br/>claim with FOR UPDATE SKIP LOCKED] --> reconcile[reconcile @production alias<br/>to latest champion in Postgres]
+    reconcile --> score[score batch<br/>@production, cached model]
+    score --> drift[drift check<br/>K-S vs base training pool]
+    drift -->|no labels due yet| stop[tick ends]
+    drift --> release[release due labels<br/>delay window elapsed]
+    release -->|no drift or cooldown active| rollback
+    release -->|drift and cooldown elapsed| retrain[retrain challenger<br/>base sample + recent labeled rows<br/>excluding the gate batch]
+    retrain --> gate[gate on the excluded labeled batch<br/>bootstrap CI on the metric delta]
+    gate -->|rejected| audit1[audit_log: gate_evaluation rejected]
+    gate -->|promoted| promote[promote: DB rows first,<br/>alias moved last]
+    promote --> skip[rollback check skipped<br/>logged as skipped]
+    audit1 --> rollback[rollback check]
+    rollback -->|reference stale| suppress[suppress this cycle]
+    rollback -->|drop below screen threshold| noop[no action]
+    rollback -->|drop flagged| paired[paired bootstrap on the live batch<br/>previous champion minus current]
+    paired -->|previous significantly better| revert[revert @production alias]
+    paired -->|not significantly better| noop
 ```
 
-Every branch writes to `audit_log`. The gate's rejection reason and the rollback check's suppression reason are first-class recorded events, not just the promote/revert paths.
+The first three ticks have no labels due and end after the drift check. Each tick runs in one database transaction, so a failed tick rolls back its claim and rows and is retried cleanly. MLflow alias moves cannot join that transaction, so they happen last, and every tick starts by resetting `@production` to the database's champion.
 
 ## Governance parameters
 
+All values live in `config/gate_config.yaml`.
+
 | Parameter | Value | Why |
 |---|---|---|
-| Primary metric | AUC-PR | Accuracy is close to meaningless at ~6.7% positive rate. |
-| Tolerance band | 0.01 | Challenger must not fall meaningfully below champion before anything else is considered. |
-| Dominance | challenger > champion | A tie within tolerance is not promoted; genuine improvement is required. |
-| Significance | Bootstrap CI on the primary metric's delta, matched batch, unconditionally | Directly tests whether AUC-PR (the metric tolerance/dominance decide on) moved by more than noise, at any sample size. Previously routed through McNemar's test on 0.5-threshold hard-label agreement whenever a batch had >=15 discordant pairs - a different statistic than the one being promoted/rejected on. McNemar is still computed and reported as a diagnostic in `audit_log`, it just no longer decides the outcome. |
-| Drift share threshold | 0.3 (3+ of 10 features individually flagged) | At 0.1, one spuriously-flagged feature out of 10 independent K-S tests (alpha=0.05, no correction) triggers a false retrain on ~40% of undrifted batches. 0.3 drops that to ~1% while still reliably catching real injected drift (3-5 features affected). |
-| Rollback drop threshold | 0.03 AUC-PR, bootstrap-CI-confirmed | A raw point-estimate threshold on one ~200-row batch swings on sampling noise alone; the CI's upper bound must still clear the threshold, not just the single estimate. |
-| Delayed labels | 3 batches | Simulates realistic label latency; nothing is evaluated against ground truth that wouldn't actually be available yet. |
+| Primary metric | AUC-PR | Accuracy is near meaningless at a ~6.7% positive rate. |
+| Significance | Bootstrap CI lower bound on the matched-batch delta above 0 (alpha 0.05, 2,000 resamples) | The deciding test. Promotion is exactly equivalent to passing it. |
+| Tolerance band | 0.01 | First rejection reason: worse than champion by more than this. Implied by significance, kept for a specific audit message. |
+| Dominance | challenger > champion | Second rejection reason: a tie is rejected. Implied by significance, kept for the same reason. |
+| McNemar | diagnostic only, reliable at 15+ discordant pairs | Logged, never decides an outcome. |
+| Drift test | K-S p-value < 0.05 per feature | Forced, with every feature declared numerical. Evidently's default changes test with reference size. |
+| Drift share threshold | 0.3 | 3+ of 10 features flagging by chance is rare under K-S at alpha 0.05 (about 1% per undrifted batch, assuming independence). |
+| Retrain cooldown | 3 batches | Drift is measured against the base pool, so once persistent drift starts it never clears. Without a cooldown, every tick would retrain. |
+| Retrain data | 3,000 base rows + up to 6,000 most recent labeled rows | Both caps configurable. The gate batch is always excluded. |
+| Rollback screen | drop of 0.03 AUC-PR versus the stored reference | Cheap trigger only. The reference is one upward-biased gated batch, so it never decides a rollback alone. |
+| Rollback decision | previous champion beats current on the same live batch, bootstrap CI lower bound above 0 | Same rigor as promotion, identical rows for both models. |
+| Staleness | drift share moved by more than 0.3, or more than 30% of features disagree on drifted or not | Compares which features drifted. Raw p-values are uniform noise when nothing has drifted. |
+| Delayed labels | 3 batches | Nothing is scored against labels that would not yet exist. |
 
 ## Design decisions that took more than one attempt to get right
 
-Documenting these because they were the actual hard part, not the initial build:
-
-- **The gate's job is to reject noise, not reward luck.** Comparing champion and challenger AUC-PR directly on tiny batches made random variation look like improvement. The three gates, tolerance, dominance, and significance, separate real gains from sampling noise.
-
-- **Rollback needs the same rigor as promotion.** Promotion used significance testing, but rollback initially relied on a noisy point estimate and repeatedly triggered on pure noise. Fixed by requiring the bootstrap CI's upper bound to confirm a real performance drop.
-
-- **A challenger must actually be able to adapt.** Retraining on the full 127,501-row base pool diluted a few hundred new labels into irrelevance. The pool is now capped and subsampled so recent post-drift data can materially change the fit.
-
-- **Rollback must reference the drifted window, not a pristine holdout.** A frozen holdout confounds model degradation with changes in the world. Promotion now stores performance and a drift fingerprint for the evaluated window, and comparisons are suppressed once that reference goes stale.
-
-- **Claim the batch before doing any work.** Concurrent scheduled and manual runs could both execute before one lost the version race, creating duplicate predictions and audit rows. Optimistic concurrency now claims the batch first, and losers do zero work.
-
-- **Split before fitting.** Imputation medians were initially fit before the holdout split, leaking holdout information into training. The split now happens first, with medians fit only on the training pool.
-
-- **Never store the answer with the features.** Scoring wrote the full row, including the true label, into features, violating the delayed-label assumption and creating a future leakage path. Only actual model input columns are now stored.
-
-- **The significance test has to test the same metric the gate is deciding on.** Significance used to route through McNemar's test (paired hard-label agreement at `decision_threshold`) whenever a batch had enough discordant pairs, and only fell back to a bootstrap CI on the AUC-PR delta below that count. McNemar and AUC-PR answer different statistical questions - a challenger could pass one and fail the other for reasons unrelated to real generalization. Significance is now always the bootstrap CI directly on the primary metric's delta; McNemar is still computed and logged as a diagnostic, it just no longer decides `passed_significance`.
-
-- **A rollback check can't be run against the window it was just derived from.** Right after a promotion, the new champion and the window it was gated against are the same model scored on the same rows the stored `window_metrics` came from - an ordinary rollback comparison there is a no-op by construction (~zero drop, identical fingerprint) that would still get logged as if a real degradation check had run. `run_tick` now skips `check_rollback` explicitly on the tick it promotes and writes an honestly-labeled `skipped` audit entry instead.
+- **The gate rejects noise, not luck.** Raw AUC-PR comparisons on 200-row batches mistook random variation for improvement, so the bootstrap CI on the matched-batch delta must clear zero.
+- **The gate batch is out of sample for both models.** The challenger was once trained on the batch it was scored on, and the bootstrap champion on a pool containing every stream batch. The stream is now carved out before the base pool, and each retrain excludes the batch under evaluation.
+- **Tolerance and dominance are nested inside significance.** A CI lower bound above zero already implies both, so they remain only as ordered rejection reasons. A randomized test asserts promotion equals the significance result.
+- **Rollback compares like with like.** A live metric against a stored single-batch reference spans different windows and carries winner's-curse bias, so the reference only screens. The decision is a paired bootstrap of current versus previous champion on the same live batch.
+- **The drift test is pinned, not defaulted.** Above 1,000 reference rows Evidently switches to a Wasserstein distance normalized by standard deviation, which misses shifts in heavy-tailed columns like `DebtRatio`. K-S is forced with every feature declared numerical, so thresholds do not depend on data volume.
+- **Staleness compares which features drifted, not p-values.** With no drift, two p-values differ by more than 0.3 about half the time per column, which would suppress nearly every rollback check.
+- **The database decides who the champion is.** MLflow alias moves cannot join a transaction, so they run last and every tick reconciles the alias to the latest non-rolled-back champion row.
+- **Claim the batch first, without blocking.** `FOR UPDATE SKIP LOCKED` lets a racing run return immediately instead of waiting on the winner.
+- **A challenger must be able to adapt.** Training on the full base pool diluted a few hundred new labels, so the base pool is sampled down and recent labeled rows are capped.
+- **No retrain without labels, no rollback check right after a promotion.** `drift_detected` is always recorded, but `retrain_triggered` also needs a labeled batch and an elapsed cooldown, and a promoting tick skips the rollback check and logs `skipped`, since its reference was just derived from the same window.
+- **Split before fitting.** Holdout and stream are carved out first, and imputation medians use the base pool only.
+- **Never store the answer with the features.** Only model input columns are stored per prediction.
 
 ## Data and drift simulation
 
-[Give Me Some Credit](https://www.kaggle.com/c/GiveMeSomeCredit) (Kaggle competition dataset, 150,000 rows, ~6.7% positive rate), split into a frozen 22,499-row holdout and a 127,501-row training pool, batched into 637 batches of 200 rows to simulate a live stream.
+[Give Me Some Credit](https://www.kaggle.com/c/GiveMeSomeCredit) (Kaggle competition dataset, 150,000 rows, ~6.7% positive rate) is split, stratified by class, into three disjoint parts:
 
-A recession scenario is injected on top of the real data, deterministically:
+| Part | Rows | Role |
+|---|---|---|
+| Holdout | 22,499 | Frozen, never drifted. Scored only to record `holdout_metrics` at promotion. |
+| Base pool | 63,751 | Trains the bootstrap champion, supplies the retrain base sample, and is the drift reference. |
+| Stream pool | 63,750 | Batched into 318 batches of 200 rows (remainder dropped) to simulate live traffic. |
+
+A recession scenario is injected deterministically per batch index (parameters in `config/drift_params.yaml`):
+
 - **Persistent drift** (batch 10 onward, never reverts): `DebtRatio` and `RevolvingUtilizationOfUnsecuredLines` shift and scale upward, `MonthlyIncome` shrinks.
-- **Temporary concept drift** (batches 15-20, then reverts): delinquent borrowers' feature values blend toward the non-delinquent centroid, simulating a period where the usual risk signals stop being as predictive.
+- **Temporary concept drift** (batches 15 to 19 inclusive, then reverts; `end_batch: 20` is exclusive): delinquent borrowers' values in five columns blend toward the non-delinquent centroid of the same batch. A single-class batch is left unchanged.
 
 ## Persistence
 
-Postgres (Neon), four tables: `pipeline_state` (single-row clock, optimistic concurrency via a version column), `predictions` (one row per scored prediction, label filled in on release), `champion_history` (N-hop promotion lineage with window metrics and drift fingerprint per entry, not just current/previous), `audit_log` (every governance decision, keyed by event type).
+Postgres (Neon), four tables:
 
-Model artifacts and registry: MLflow on DagsHub, alias-based (`@production`, `@challenger`), never the deprecated stage-based API. Raw and processed data: DVC against a DagsHub-hosted S3-compatible remote.
+- `pipeline_state`: single-row clock, optimistic concurrency via a version column.
+- `predictions`: one row per scored prediction, label filled in on release.
+- `champion_history`: N-hop promotion lineage with window metrics, frozen-holdout metrics, drift fingerprint, staleness flag and rollback markers.
+- `audit_log`: every governance decision by event type: `clock_advance`, `drift_check`, `label_release`, `gate_evaluation`, `promotion`, `rollback_check`, `rollback`, `alias_reconciled`.
+
+Models and registry: MLflow on DagsHub, alias-based (`@production`, `@challenger`), never the deprecated stage API. Data: DVC against a DagsHub-hosted S3-compatible remote.
+
+Dashboard trend chart and lineage deltas use the frozen-holdout metric, the only value measured on the same rows for every champion. The per-champion window metric is shown separately as the reference window.
 
 ## Project structure
 
 ```
 credit-risk-autopilot/
+├── assets/                     # dashboard icon and README screenshots
+│
 ├── config/
-│   ├── drift_params.yaml       # recession scenario parameters
-│   └── gate_config.yaml        # primary metric, tolerance band, significance, thresholds
+│   ├── drift_params.yaml       # recession scenario
+│   └── gate_config.yaml        # metric, thresholds, caps, cooldown
 │
 ├── data/
-│   ├── raw/                    # cs-training.csv placed here manually, gitignored
-│   └── processed/               # generated by run_demo_loop.py
+│   ├── raw/                    # cs-training.csv, placed manually
+│   └── processed/              # pickles generated by run_demo_loop.py
 │
 ├── src/
-│   ├── data/                   # ingest, leakage-safe split, drift injection
-│   ├── db/                     # connection, repository (bulk ops), schema.sql
-│   ├── model/                  # training, feature constants
-│   ├── gate/                   # evaluate.py, pure logic, most heavily tested file
-│   ├── drift/                  # Evidently wrapper, reused for retrain trigger + fingerprint
-│   ├── orchestration/          # clock (single writer), pipeline, promote/rollback
-│   ├── serving/                # FastAPI, cached model reload on alias change
-│   └── utils/                  # config loading, shared model cache
+│   ├── data/                   # ingest, stratified splits, drift injection
+│   ├── db/                     # connection, repository, schema.sql
+│   ├── model/                  # feature constants, training
+│   ├── gate/                   # evaluate.py: metrics, bootstrap delta CI, gate decision
+│   ├── drift/                  # Evidently K-S wrapper, fingerprint, staleness
+│   ├── orchestration/          # clock, pipeline tick, promote / rollback / reconcile
+│   ├── serving/                # FastAPI app
+│   ├── llm/                    # single decision-explanation call
+│   └── utils/                  # config and paths, logging, aliased model cache
 │
 ├── dashboard/
 │   ├── app.py
+│   ├── styles.css
 │   └── views/                  # overview, lineage, drift, audit_log
 │
 ├── scripts/
-│   ├── advance_clock.py        # entrypoint cron and manual runs both call
-│   ├── run_demo_loop.py        # full bootstrap -> drift -> retrain -> promote -> rollback run
-│   └── smoke_test_mlflow.py    # fast connectivity check before a full run
+│   ├── advance_clock.py        # entrypoint for cron and manual runs
+│   ├── run_demo_loop.py        # bootstrap, then 25 ticks, then summary
+│   └── smoke_test_mlflow.py    # connectivity check
 │
-├── tests/                      # 57 tests
+├── tests/                      # 105 tests, 11 files
 │
 ├── .github/workflows/
-│   ├── ci.yml                  # lint + test on push/PR
-│   └── cron_advance.yml        # scheduled clock advance, verified running end to end
+│   ├── ci.yml                  # lint and test against a Postgres service
+│   └── cron_advance.yml        # scheduled clock advance
 │
 ├── .streamlit/config.toml
 ├── .gitignore
@@ -150,32 +172,35 @@ credit-risk-autopilot/
 ### 1. Accounts (all free tier)
 
 - [Neon](https://neon.tech) for Postgres.
-- [DagsHub](https://dagshub.com) for MLflow tracking/registry and a DVC-compatible remote.
-- [Kaggle](https://www.kaggle.com) for the dataset (competition, not a plain dataset, see below).
+- [DagsHub](https://dagshub.com) for MLflow tracking and registry, and a DVC-compatible remote.
+- [Kaggle](https://www.kaggle.com) for the dataset (a competition, see step 3).
+- Optional: [Groq](https://groq.com) for audit explanations, [Logfire](https://logfire.pydantic.dev) for tracing. Without `GROQ_API_KEY` the dashboard shows "explanation unavailable". Without `LOGFIRE_TOKEN` nothing is sent, but spans still print to the console.
 
 ### 2. Install
 
 ```
 python -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env   # fill in DATABASE_URL, MLFLOW_TRACKING_*
+cp .env.example .env
 ```
+
+Fill in `DATABASE_URL` and the `MLFLOW_TRACKING_*` values at minimum. Python 3.12 is assumed.
 
 ### 3. Dataset
 
-This is a Kaggle *competition* dataset, which requires accepting competition rules on the site and isn't reachable via the plain dataset API even with valid credentials (that path returns a 403). Download manually from the [competition page](https://www.kaggle.com/c/GiveMeSomeCredit/data) and place `cs-training.csv` in `data/raw/`.
+This is a Kaggle *competition* dataset: you must accept the rules on the site, and the plain dataset API returns a 403 even with valid credentials. Download it from the [competition page](https://www.kaggle.com/c/GiveMeSomeCredit/data) and place `cs-training.csv` in `data/raw/`.
 
 ### 4. Database
 
-No local `psql` needed. Paste [`src/db/schema.sql`](src/db/schema.sql) into Neon's SQL Editor, or let `run_demo_loop.py` apply it automatically on first run (it's idempotent, `CREATE TABLE IF NOT EXISTS` throughout).
+No local `psql` needed. Paste [`src/db/schema.sql`](src/db/schema.sql) into Neon's SQL Editor, or let `run_demo_loop.py` apply it on first run. It is idempotent (`CREATE TABLE IF NOT EXISTS`) and runs as a whole through the driver, not split on semicolons.
 
-Neon's dashboard gives a plain `postgresql://` connection string; this project needs the `postgresql+psycopg://` scheme (psycopg v3, not the psycopg2 SQLAlchemy defaults to). `src/db/connection.py` normalizes this automatically even if you paste the plain version, but the `.env.example` template already has the correct scheme.
+Neon's plain `postgresql://` connection string is rewritten to `postgresql+psycopg://` (psycopg v3) by `src/db/connection.py`, so either form works in `.env` and CI secrets.
 
 ### 5. DVC remote (DagsHub)
 
-DagsHub's DVC remote is not a bucket you name yourself. It's a fixed placeholder URL (`s3://dvc`) proxied through a separate `endpointurl` that points at your specific repo, both of which are easy to miss and produce confusing errors if skipped.
+DagsHub's DVC remote is not a bucket you name: it is a fixed placeholder URL (`s3://dvc`) proxied through an `endpointurl` pointing at your repo. Skipping either gives confusing errors.
 
-The exact commands, pre-filled with your username, repo name, and a token, are on your DagsHub repo page: **Remote** button (top right) then **Data** tab then **DVC**. They look like this:
+Your DagsHub repo page has these commands pre-filled with your username, repo and a token (**Remote** button, **Data** tab, **DVC**):
 
 ```
 dvc init
@@ -186,74 +211,107 @@ dvc remote modify origin --local access_key_id <dagshub-token>
 dvc remote modify origin --local secret_access_key <dagshub-token>
 ```
 
-Notes that cost real debugging time to learn:
-- **Same token for both fields.** `access_key_id` and `secret_access_key` are the same DagsHub token, not a username/token pair.
-- **Run `dvc remote default origin` even though `-d` on `add` is supposed to set the default already.** DVC's own docs say `-d`/`--default` on `remote add` is sufficient by itself, and it may well be fine for you. This extra line is cheap insurance in case it isn't - it's idempotent, so running it costs nothing either way.
-- **Use a token from Settings then Tokens, not the Remote dropdown's session token.** The token DagsHub shows inline in the Remote setup page can be a short-lived session token. A token generated from your DagsHub account's Settings then Tokens page is long-lived and won't expire out from under a scheduled job.
+- **Same token for both fields**, not a username and token pair.
+- **Run `dvc remote default origin` anyway.** It is idempotent and cheap insurance after `-d`.
+- **Use a token from Settings, then Tokens.** The token shown inline on the Remote page can be a short-lived session token. An account token is long-lived and survives a scheduled job.
 
-Then track and push the data:
+The processed pickles come from the demo loop, so run it once (see "Running it") before tracking them:
 
 ```
-dvc add data/raw/cs-training.csv data/processed/*.pkl
-git add data/raw/*.dvc data/processed/*.dvc .dvc/config
+dvc add data/raw/cs-training.csv data/processed/pretrain_batches.pkl data/processed/training_pool.pkl data/processed/holdout.pkl
+git add data .dvc .dvcignore
 git commit -m "Track data with DVC"
 git push
 dvc push
 ```
 
-Verify it actually uploaded, don't just trust that the command exited 0:
+Verify the upload instead of trusting the exit code:
 
 ```
 dvc status -c   # should report nothing pending against the remote
 ```
 
+`dvc add` also writes a `.gitignore` beside the data, which keeps the pickles and CSV out of git, and `git add data` stages it with the `.dvc` pointers. The cron workflow refuses to run until all three processed `.dvc` files are committed.
+
 ### 6. GitHub Actions secrets (for the scheduled cron job)
 
-`cron_advance.yml` runs `advance_clock.py` on a schedule against a fresh, empty checkout every time, so it needs every credential the pipeline uses, set as repository secrets (Settings then Secrets and variables then Actions then New repository secret), not just available in your local `.env`:
+`cron_advance.yml` runs `advance_clock.py` on a fresh empty checkout each time, so every credential must be a repository secret (Settings, Secrets and variables, Actions, New repository secret), not just present in your local `.env`:
 
 | Secret name | Value | Notes |
 |---|---|---|
-| `DATABASE_URL` | Neon connection string | Must use `postgresql+psycopg://`, same as local. |
-| `MLFLOW_TRACKING_URI` | `https://dagshub.com/<user>/<repo>.mlflow` | If this is missing, MLflow does not error, it silently falls back to a brand-new local SQLite database on the runner. Every model lookup then fails with a confusing "Registered Model not found," because it's looking at an empty database, not a broken one. |
+| `DATABASE_URL` | Neon connection string | Either scheme works. |
+| `MLFLOW_TRACKING_URI` | `https://dagshub.com/<user>/<repo>.mlflow` | If missing, MLflow does not error: it silently falls back to a new local SQLite store on the runner, and every model lookup fails with a confusing "Registered Model not found". |
 | `MLFLOW_TRACKING_USERNAME` | Your DagsHub username | |
-| `MLFLOW_TRACKING_PASSWORD` | A DagsHub access token | From Settings then Tokens, same long-lived-token guidance as above. |
-| `DVC_ACCESS_KEY_ID` | Your DagsHub token | Same token you used for the local DVC remote setup. |
+| `MLFLOW_TRACKING_PASSWORD` | A DagsHub access token | Settings, Tokens. Use a long-lived token. |
+| `DVC_ACCESS_KEY_ID` | Your DagsHub token | Same token as the local DVC remote. |
 | `DVC_SECRET_ACCESS_KEY` | Your DagsHub token | Same token, both fields. |
 
-Two things specific to how the workflow uses these that are worth knowing if you ever edit it:
-- `dvc pull` in CI needs credentials exposed as `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`, not `DVC_ACCESS_KEY_ID` / `DVC_SECRET_ACCESS_KEY`. `dvc-s3` is boto3 under the hood, and boto3's environment-variable credential fallback only recognizes the standard AWS names. The repo secrets keep the `DVC_*` names for clarity in the GitHub UI; the workflow maps them to the AWS names internally when invoking `dvc pull`.
-- The workflow has a preflight step that checks `.dvc/` exists and both DVC secrets are non-empty before attempting `dvc pull`, failing with a plain-English message and the setup commands above instead of DVC's generic "not inside of a DVC repository" error.
+If you edit the workflow:
 
-Once all six secrets are set, trigger the workflow manually first (Actions then Advance pipeline clock then Run workflow) rather than waiting for the schedule, so you get fast feedback if anything's misconfigured. Verified running successfully end to end on a real schedule as of this writing.
+- `dvc pull` needs `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`, because `dvc-s3` is boto3 underneath and boto3 only reads the AWS names. The secrets keep their `DVC_*` names and the workflow maps them for `dvc pull`.
+- A preflight step checks that `.dvc/` exists, the three processed `.dvc` files are committed and both DVC secrets are non-empty, failing with a plain message instead of DVC's generic "not inside of a DVC repository".
+
+Trigger the workflow manually first (Actions, Advance pipeline clock, Run workflow) for fast feedback on misconfiguration.
+
+The schedule is every 3 hours, which finishes the 318 batches in about 40 days. GitHub disables scheduled workflows on public repositories after 60 days without repository activity, so a slower cadence can stall before the stream ends. After that, each run reports `past_end_of_dataset` and exits cleanly.
 
 ## Running it
 
 ```
-python scripts/smoke_test_mlflow.py   # fast connectivity check, seconds not minutes
-python scripts/run_demo_loop.py       # full run: bootstrap -> drift -> retrain -> promote -> rollback
-uvicorn src.serving.app:app --reload  # score a single applicant, GET /model-info, POST /predict
-streamlit run dashboard/app.py        # explore the result
+python scripts/smoke_test_mlflow.py   # connectivity check, seconds not minutes
+python scripts/run_demo_loop.py       # bootstrap, 25 ticks, summary
+uvicorn src.serving.app:app --reload  # GET /health, GET /model-info, POST /predict
+streamlit run dashboard/app.py        # overview, lineage, drift, audit log
 ```
 
-A full 25-batch run takes roughly 5-15 minutes, dominated by MLflow round trips to DagsHub on every retrain, not local compute.
+A 25-tick run took about 90 seconds against local Postgres and a local MLflow store. Against Neon and DagsHub expect longer, dominated by MLflow round trips on each retrain (not timed). It covers the bootstrap champion, persistent drift from batch 10 and the concept-drift window at batches 15 to 19.
 
-`scripts/smoke_test_mlflow.py` prints the tracking URI it's actually connected to and refuses to report success unless it looks like a DagsHub URL, specifically so it can't give a false "connectivity OK" against a local fallback store the way it once did during development.
+- The demo loop refuses to start on a database that already holds pipeline state. To rerun it, reset first:
+
+  ```sql
+  TRUNCATE predictions, champion_history, audit_log RESTART IDENTITY;
+  UPDATE pipeline_state SET current_batch = 0, version = 0 WHERE id = 1;
+  ```
+
+- Existing processed pickles are reused, not regenerated, so DVC-tracked files stay stable.
+- Paths resolve against the repository root, so scripts work from any working directory.
+- The serving app rechecks the `@production` alias at most every 30 seconds and loads the exact resolved version, so promotions and rollbacks apply without a redeploy.
+- `smoke_test_mlflow.py` prints its tracking URI and fails unless it looks like DagsHub, so it cannot pass against a local fallback store.
 
 ## Testing
-
-57 tests across 8 files, all pure-logic or mocked, no live infrastructure required to run them. The gate (`test_gate.py`) is the most heavily tested module: tolerance-band rejection, dominance rejection, the bootstrap significance check at every discordant-pair count (with McNemar's diagnostic reliability flag verified separately from what actually gates promotion), and, specifically, a fixed-seed reproduction of a challenger that looks better purely from small-sample noise, which the gate must reject. `test_pipeline.py` also covers `run_tick` end-to-end with everything external mocked: a promoting tick must skip `check_rollback` and log an explicit `skipped` audit entry, a non-promoting tick must still run the real rollback check.
-
-`tests/test_drift_detect.py` pins a real captured `evidently==0.7.21` output as a regression fixture: an earlier version of the fingerprint extraction silently matched on a key that didn't exist in the real schema and returned `drift_share=None` on every call, so retrain never triggered across a full 25-tick run despite real, measurable drift. That specific payload is now a permanent test case.
 
 ```
 pytest tests -v
 ruff check src tests scripts dashboard
 ```
 
+105 tests across 11 files. Unit tests need nothing external. `test_integration_db.py` and `test_integration_pipeline.py` run only when `TEST_DATABASE_URL` points at Postgres, which CI provides. Locally:
+
+```
+docker run -d --name crg-pg -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=testdb -p 5432:5432 postgres:16
+export TEST_DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5432/testdb
+pytest tests -v
+```
+
+The integration tests drop and recreate the four tables in that database, so never point them at real data.
+
+Coverage:
+
+- **Gate** (`test_gate.py`): rejection paths, bootstrap CI reproducibility and symmetry, and a randomized check that promotion equals the significance result.
+- **Drift** (`test_drift_detect.py`): real Evidently at a large reference, low-cardinality and constant columns, staleness immune to p-value noise.
+- **Rollback and promotion** (`test_promote_rollback.py`): stale suppression, no-candidate flagging, rollback only when the previous champion is significantly better, alias moved last, reconciliation.
+- **Pipeline** (`test_pipeline.py`): pool caps and exclusion, cooldown, no retrain before labels are due, skipped rollback check on a promoting tick.
+- **Postgres** (`test_integration_db.py`): migrations, single-winner claims, `SKIP LOCKED` under a held lock, labeled-row filtering, payload filters applied before the limit.
+- **End to end** (`test_integration_pipeline.py`): multi-tick runs on Postgres, local MLflow and Evidently, asserting no gate-batch leakage into training, the cooldown, alias reconciliation, and clean rollback of a failed tick.
+- **Data, drift injection, serving, cache, clock**: disjoint splits, deterministic drift, endpoints and 503 handling, cache TTL and thread safety, single-writer claims.
+
 ## Known limitations
 
-- **McNemar is a diagnostic only, and is frequently unreliable as one at this batch size.** ~200 rows and ~13 positives per batch rarely produces the 15+ discordant pairs McNemar needs to have real power; `details["mcnemar_reliable"]` reflects that directly rather than silently trusting an underpowered number. It no longer decides promotion either way, only the bootstrap CI on the primary metric's delta does.
-- **The concept-drift blend target is computed per batch, not from a fixed reference point.** `apply_temporary_concept_drift` blends delinquent rows toward *that batch's own* non-delinquent mean, not a fixed global centroid. At 200 rows that's mostly noise around a stable quantity, but it does mean the injected "drift target" isn't perfectly fixed across batches the way the persistent-drift shift/scale is. Known, not treated as a bug: fixing it would mean threading a precomputed reference centroid through drift injection instead of recomputing it in-place, a real change worth making if this scenario needed to be more tightly controlled than a portfolio demo requires.
-- **The Evidently schema match is verified against one live capture (0.7.21)**, not guaranteed stable across versions.
-- **Rollback rarely has anywhere to revert to in a short run.** With only one or two promotions in a 25-batch demo, most rollback triggers find no valid prior champion and correctly do nothing beyond flagging. The underlying mechanism is exercised and tested (`find_previous_champion`, N-hop selection, staleness suppression), but a longer run with more promotions would exercise an actual reversion more directly.
-- **Model quality is not the point.** The challenger is a plain logistic regression on purpose; the governance loop around it, not the model itself, is the deliverable.
+- **McNemar is diagnostic only and often unreliable at this batch size.** About 200 rows and 13 positives per batch rarely yield 15 discordant pairs. `details["mcnemar_reliable"]` says so.
+- **Drift is measured on the current batch, labels arrive for an earlier one.** With a 3-batch delay the retrain trigger and gate window can sit in different regimes. This is inherent to delayed labels.
+- **Detection power is unmeasured.** Whether 200-row batches reliably flag all three persistently drifted features under K-S at alpha 0.05 is untested on the real dataset. The cooldown bounds the cost of misses and false alarms, not their frequency.
+- **A long transaction spans MLflow calls.** A dropped connection rolls the tick back safely and it retries from the start.
+- **Rollback rarely has anywhere to revert to in a short run.** With few or no promotions in a 25-tick demo, flagged degradations find no earlier champion and only record that fact.
+- **The concept-drift blend target is computed per batch**, not from a fixed reference centroid.
+- **Processed data is stored as pickle.** Only load pickles from your own DVC remote.
+- **Model quality is not the point.** The challenger is a plain logistic regression on purpose. The governance loop is the deliverable.
