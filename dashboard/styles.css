@@ -1,24 +1,3 @@
-/* ============================================================
-   Credit Risk Governance — design system (v3)
-
-   Nav is top tabs, not a sidebar - there's one dataset and four
-   views on it, not a deep app tree that needs permanent chrome.
-   A sidebar here would just be empty real estate holding four
-   links a tab bar already does better.
-
-   Color discipline: one brand color (a quiet slate-teal), used
-   ONLY for the active tab, primary numbers, and chart lines.
-   Semantic color (success/warning/danger) appears ONLY where it
-   encodes a real pass/fail/stale state - never as decoration.
-   Neutral cards stay neutral. This is what "less flashbang" means
-   in practice: fewer colors on screen at once, each one meaning
-   something specific.
-
-   Streamlit injects its own top decoration bar (a gradient
-   stripe) above the app - that's the loud element from the last
-   pass, not anything defined here. It's switched off below.
-   ============================================================ */
-
 @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600;700&display=swap');
 
 :root {
@@ -33,13 +12,11 @@
     --ink-500: #71767F;
     --ink-400: #8F949C;
 
-    /* the one brand color in the system */
     --brand:        #2A5A62;
     --brand-hover:  #1F444B;
     --brand-soft:   #EAF1F1;
     --brand-border: #CBDEDF;
 
-    /* semantic - reserved for actual pass/fail/stale states */
     --success:      #2E6B45;
     --success-soft: #EAF4EC;
     --success-border: #C3E0CB;
@@ -55,7 +32,6 @@
     --neutral-soft: #EEF0F2;
     --neutral-border: #E1E4E8;
 
-    /* chart categorical accents - muted, used only in the activity bar chart */
     --chart-1: #2A5A62;
     --chart-2: #6E7B8C;
     --chart-3: #8A6412;
@@ -78,18 +54,9 @@
     --text-micro: 0.68rem;
 }
 
-/* ---------------------------------------------------------------
-   Kill Streamlit's own chrome: the rainbow decoration bar and the
-   default header. This app draws its own header below.
-   --------------------------------------------------------------- */
-
 [data-testid="stDecoration"] { display: none !important; }
 [data-testid="stHeader"] { background: transparent; height: 0; }
 [data-testid="stToolbar"] { display: none; }
-
-/* ---------------------------------------------------------------
-   Global type + page shell
-   --------------------------------------------------------------- */
 
 html, body, [data-testid="stAppViewContainer"], [data-testid="stMarkdownContainer"],
 .stMarkdown, p, span, div, label, button, input, select, textarea {
@@ -113,10 +80,6 @@ h1, h2, h3 { font-family: var(--font-sans); color: var(--ink-900); letter-spacin
     font-family: var(--font-mono) !important;
     font-variant-numeric: tabular-nums;
 }
-
-/* ---------------------------------------------------------------
-   App header: brand + live status, one slim row, no card chrome
-   --------------------------------------------------------------- */
 
 .crg-topbar {
     display: flex;
@@ -214,12 +177,6 @@ h1, h2, h3 { font-family: var(--font-sans); color: var(--ink-900); letter-spacin
 .crg-dot.warn { background: var(--warning); }
 .crg-dot.idle { background: var(--ink-400); }
 
-/* ---------------------------------------------------------------
-   Tabs — the primary nav. Underline indicator, no boxed tab
-   look, generous hit area, consistent with the rest of the type
-   scale rather than Streamlit's default tab styling.
-   --------------------------------------------------------------- */
-
 [data-testid="stTabs"] { margin-top: 10px; }
 
 [data-testid="stTabs"] [data-baseweb="tab-list"] {
@@ -251,19 +208,11 @@ h1, h2, h3 { font-family: var(--font-sans); color: var(--ink-900); letter-spacin
 
 [data-testid="stTabs"] [data-baseweb="tab-panel"] { padding-top: 18px; }
 
-/* Paired cards use their natural content height. Streamlit's
-   column containers may stretch, but the cards themselves should not
-   inherit that height and create empty space. */
-
 .crg-metric-block, .crg-funnel {
     height: auto;
     min-height: 0;
     box-sizing: border-box;
 }
-
-/* ---------------------------------------------------------------
-   Section headers
-   --------------------------------------------------------------- */
 
 .crg-section-header {
     display: flex;
@@ -286,12 +235,6 @@ h1, h2, h3 { font-family: var(--font-sans); color: var(--ink-900); letter-spacin
     color: var(--ink-400);
     white-space: nowrap;
 }
-
-/* ---------------------------------------------------------------
-   KPI cards - one visual weight, one accent rule: color only on
-   the two cards where it encodes a real state (win rate / rollback
-   rate). Everything else is neutral ink.
-   --------------------------------------------------------------- */
 
 .crg-kpi-row {
     display: grid;
@@ -335,13 +278,6 @@ h1, h2, h3 { font-family: var(--font-sans); color: var(--ink-900); letter-spacin
     color: var(--ink-400);
 }
 
-/* ---------------------------------------------------------------
-   Metric block: a single card holding several related figures
-   side by side, divided by hairlines - replaces the old pattern
-   of one KPI card per metric, which produced uneven half-empty
-   rows whenever a champion had fewer or more metrics.
-   --------------------------------------------------------------- */
-
 .crg-metric-block {
     display: flex;
     flex-wrap: wrap;
@@ -379,17 +315,12 @@ h1, h2, h3 { font-family: var(--font-sans); color: var(--ink-900); letter-spacin
     margin-top: 4px;
 }
 
-/* status cell shows a badge instead of a numeric value */
 .crg-metric-cell-status {
     display: flex;
     align-items: center;
     gap: 6px;
     margin-top: 2px;
 }
-
-/* ---------------------------------------------------------------
-   Funnel / breakdown bars
-   --------------------------------------------------------------- */
 
 .crg-funnel {
     background: var(--surface);
@@ -427,10 +358,6 @@ h1, h2, h3 { font-family: var(--font-sans); color: var(--ink-900); letter-spacin
 
 .crg-funnel-fill { height: 100%; border-radius: 999px; }
 
-/* ---------------------------------------------------------------
-   Badges
-   --------------------------------------------------------------- */
-
 .crg-badge {
     display: inline-flex;
     align-items: center;
@@ -448,10 +375,6 @@ h1, h2, h3 { font-family: var(--font-sans); color: var(--ink-900); letter-spacin
 .crg-badge-rollback { background: var(--danger-soft); color: var(--danger); border-color: var(--danger-border); }
 .crg-badge-stale    { background: var(--warning-soft); color: var(--warning); border-color: var(--warning-border); }
 .crg-badge-neutral  { background: var(--brand-soft); color: var(--brand); border-color: var(--brand-border); }
-
-/* ---------------------------------------------------------------
-   Lineage timeline
-   --------------------------------------------------------------- */
 
 .crg-timeline {
     position: relative;
@@ -515,10 +438,6 @@ h1, h2, h3 { font-family: var(--font-sans); color: var(--ink-900); letter-spacin
 .crg-timeline-delta.down { color: var(--danger); background: var(--danger-soft); }
 .crg-timeline-delta.flat { color: var(--ink-400); background: var(--neutral-soft); }
 
-/* ---------------------------------------------------------------
-   Audit log rows
-   --------------------------------------------------------------- */
-
 .crg-audit-row {
     display: flex;
     align-items: center;
@@ -548,10 +467,6 @@ h1, h2, h3 { font-family: var(--font-sans); color: var(--ink-900); letter-spacin
 .crg-audit-row.type-gate_evaluation { border-left-color: var(--chart-4); }
 .crg-audit-row.type-label_release   { border-left-color: var(--ink-400); }
 
-/* ---------------------------------------------------------------
-   Empty states
-   --------------------------------------------------------------- */
-
 .crg-empty {
     display: flex;
     flex-direction: column;
@@ -568,17 +483,7 @@ h1, h2, h3 { font-family: var(--font-sans); color: var(--ink-900); letter-spacin
 .crg-empty-title { font-size: var(--text-body); font-weight: 600; color: var(--ink-700); margin-bottom: 4px; }
 .crg-empty-caption { font-size: var(--text-caption); max-width: 340px; }
 
-/* ---------------------------------------------------------------
-   Dividers
-   --------------------------------------------------------------- */
-
 .crg-divider { height: 1px; background: var(--line); margin: 20px 0; }
-
-/* ---------------------------------------------------------------
-   Segmented pill controls - st.radio(horizontal=True), used for the
-   audit log's quick-view and range filters. Restyled from bare radio
-   buttons into a banking-statement-style filter chip row.
-   --------------------------------------------------------------- */
 
 [data-testid="stRadio"] > div[role="radiogroup"] {
     display: flex;
@@ -616,10 +521,6 @@ h1, h2, h3 { font-family: var(--font-sans); color: var(--ink-900); letter-spacin
     color: var(--ink-900);
     font-weight: 600;
 }
-
-/* ---------------------------------------------------------------
-   Widget polish
-   --------------------------------------------------------------- */
 
 [data-testid="stSelectbox"] div[data-baseweb="select"] > div {
     border-radius: 7px;
@@ -668,3 +569,5 @@ button[kind="secondary"]:hover, .stButton button:hover {
     border-color: var(--brand);
     color: var(--brand);
 }
+.crg-audit-row.type-clock_advance     { border-left-color: var(--ink-400); }
+.crg-audit-row.type-alias_reconciled  { border-left-color: var(--warning); }

@@ -1,41 +1,25 @@
-"""Audit log: every governance decision, filterable by event type. Each row
-shows a short, human-readable summary (color-coded by event type) so the
-list is glanceable; the full JSON payload is one click away, not the
-default view. This is the view that proves the audit trail is real -
-gate rejections and rollback checks show up here just as clearly as
-promotions, not just in a database table nobody looks at.
-
-Rather than dumping every recorded event on load, the log opens on a small
-"Recent" slice with quick-view chips (Promotions, Rollbacks, ...) and a
-separate range chip (Last 10 / 25 / 50 / All) - the statement-view pattern
-banking apps use, so the common case ("did anything get promoted lately")
-doesn't require scrolling past hundreds of drift_check/label_release rows
-first.
-"""
-
 import textwrap
-from typing import Callable
+import html
 
 import streamlit as st
 
 from src.db.repository import get_audit_log
 from src.llm.explain import explain_event
 
-# label -> (event_type to query for, optional predicate over event_payload
-# to narrow further). Rejections and promotions are both gate_evaluation
-# rows distinguished only by payload["promote"], so a plain event_type
-# filter can't separate them on its own.
-QUICK_VIEWS: dict[str, tuple[str | None, Callable[[dict], bool] | None]] = {
+QUICK_VIEWS: dict[str, tuple[str | None, dict[str, str] | None]] = {
     "Recent": (None, None),
     "Promotions": ("promotion", None),
     "Rollbacks": ("rollback", None),
-    "Rejected challengers": ("gate_evaluation", lambda p: not p.get("promote")),
+    "Rejected challengers": ("gate_evaluation", {"promote": "false"}),
     "Drift checks": ("drift_check", None),
     "Label releases": ("label_release", None),
-    "All": (None, None),
 }
 
 RANGE_OPTIONS = {"Last 10": 10, "Last 25": 25, "Last 50": 50, "Last 100": 100, "All": 5000}
+
+
+def _e(value) -> str:
+    return html.escape(str(value))
 
 
 def _summarize(event_type: str, payload: dict) -> str:
@@ -44,33 +28,44 @@ def _summarize(event_type: str, payload: dict) -> str:
         delta = payload.get("delta")
         return f"{verdict} &middot; delta {delta:+.4f}" if delta is not None else verdict
     if event_type == "promotion":
-        return f"model version {payload.get('model_version')} promoted to production"
+        return f"model version {_e(payload.get('model_version'))} promoted to production"
     if event_type == "rollback":
         return (
-            f"reverted from v{payload.get('rolled_back_from')} "
-            f"to v{payload.get('rolled_back_to')}"
+            f"reverted from v{_e(payload.get('rolled_back_from'))} "
+            f"to v{_e(payload.get('rolled_back_to'))}"
         )
     if event_type == "rollback_check":
+        if payload.get("skipped"):
+            return "skipped, challenger promoted on this tick"
         if payload.get("reference_stale"):
             return "reference stale, rollback check suppressed"
-        # rollback_triggered here only means "degradation flagged", not
-        # "reverted": this row's own payload never records whether a
-        # valid prior champion existed to revert to. When one did, a
-        # separate "rollback" event (above) is the actual reversion
-        # record - look for it right next to this one.
         if payload.get("rollback_triggered"):
-            return "degradation flagged, see nearby rollback event for outcome"
+            return "earlier champion significantly better, rollback executed"
+        if payload.get("degradation_flagged"):
+            return "degradation flagged, rollback not warranted"
         return "no rollback needed"
     if event_type == "drift_check":
         fingerprint = payload.get("fingerprint", {})
         share = fingerprint.get("drift_share")
         share_str = f"{share:.3f}" if isinstance(share, (int, float)) else "n/a"
-        verdict = "retrain triggered" if payload.get("retrain_triggered") else "no drift"
+        if payload.get("retrain_triggered"):
+            verdict = "retrain triggered"
+        elif payload.get("drift_detected"):
+            verdict = "drift detected, no retrain"
+        else:
+            verdict = "no drift"
         return f"{verdict} &middot; drift share {share_str}"
     if event_type == "label_release":
         n_released = payload.get("n_labels_released")
         batch_id = payload.get("batch_id")
-        return f"{n_released} labels released for batch {batch_id}"
+        return f"{_e(n_released)} labels released for batch {batch_id}"
+    if event_type == "clock_advance":
+        return f"clock advanced to batch {_e(payload.get('batch'))}"
+    if event_type == "alias_reconciled":
+        return (
+            f"production alias reset to v{_e(payload.get('expected_version'))} "
+            f"(was v{_e(payload.get('found_version'))})"
+        )
     return ""
 
 
@@ -83,14 +78,13 @@ def render(engine) -> None:
             "Range", list(RANGE_OPTIONS), horizontal=True, label_visibility="collapsed", index=0
         )
 
-    event_type, predicate = QUICK_VIEWS[view]
+    event_type, payload_filter = QUICK_VIEWS[view]
     limit = RANGE_OPTIONS[range_label]
 
     with engine.connect() as conn:
-        events = get_audit_log(conn, event_type=event_type, limit=limit)
-
-    if predicate is not None:
-        events = [e for e in events if predicate(e["event_payload"])]
+        events = get_audit_log(
+            conn, event_type=event_type, limit=limit, payload_equals=payload_filter
+        )
 
     st.markdown('<div style="height:4px;"></div>', unsafe_allow_html=True)
 

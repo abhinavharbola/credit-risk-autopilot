@@ -1,15 +1,3 @@
-"""Overview: current clock position and production model, the metrics that
-actually describe governance health (challenger win rate, rollback rate),
-how champion quality has moved across promotions, a breakdown of how gate
-evaluations resolve, and recent audit_log activity.
-
-Color is used only where it encodes a real state: the win-rate and
-rollback-rate KPI values, and the reference-fresh/stale badge. Everything
-else (batch, version, metric figures) stays neutral ink - a dashboard where
-every card is a different color stops actually communicating anything with
-color.
-"""
-
 import textwrap
 
 import plotly.graph_objects as go
@@ -26,8 +14,6 @@ EVENT_COLORS_HEX = {
     "label_release": "#B0B5BC",
 }
 
-# Known primary_metric keys get a proper display label; anything else falls
-# back to a readable title-case rather than str.capitalize()'s "Auc pr".
 METRIC_LABELS = {
     "auc_pr": "AUC-PR",
     "recall_at_threshold": "Recall",
@@ -102,8 +88,6 @@ def render(engine) -> None:
     n_rollbacks = sum(1 for h in champion_history if h["rolled_back_at"] is not None)
     rollback_rate = n_rollbacks / n_promotions_total if n_promotions_total else None
 
-    # --- KPI row: all four cards same visual weight, color reserved for
-    # the two rate cards where it actually encodes good/bad -------------
     cols = st.columns(4)
     with cols[0]:
         _kpi_card("Current batch", str(state["current_batch"]), "pipeline clock position")
@@ -119,7 +103,7 @@ def render(engine) -> None:
             caption,
         )
     with cols[2]:
-        value = f"{win_rate:.0%}" if win_rate is not None else "—"
+        value = f"{win_rate:.0%}" if win_rate is not None else "n/a"
         caption = (
             f"{n_gate_promotions} of {n_gate_evals} challengers promoted"
             if n_gate_evals
@@ -127,7 +111,7 @@ def render(engine) -> None:
         )
         _kpi_card("Challenger win rate", value, caption, accent="success" if n_gate_evals else None)
     with cols[3]:
-        value = f"{rollback_rate:.0%}" if rollback_rate is not None else "—"
+        value = f"{rollback_rate:.0%}" if rollback_rate is not None else "n/a"
         caption = (
             f"{n_rollbacks} of {n_promotions_total} promotions reverted"
             if n_promotions_total
@@ -138,9 +122,6 @@ def render(engine) -> None:
 
     st.markdown('<div class="crg-divider"></div>', unsafe_allow_html=True)
 
-    # --- current champion (left) + gate evaluation breakdown (right) ---
-    # Both are compact enough to sit side by side rather than stack as two
-    # full-width rows.
     col_champion, col_funnel = st.columns([3, 2])
 
     with col_champion:
@@ -152,7 +133,7 @@ def render(engine) -> None:
                     '<div class="crg-metric-cell">'
                     f'<div class="crg-metric-cell-label">{_metric_label(metric)}</div>'
                     f'<div class="crg-metric-cell-value">{value:.4f}</div>'
-                    '<div class="crg-metric-cell-caption">on gated window</div>'
+                    '<div class="crg-metric-cell-caption">on reference window</div>'
                     "</div>"
                 )
             stale = bool(latest_champion.get("reference_stale"))
@@ -203,16 +184,15 @@ def render(engine) -> None:
 
     st.markdown('<div class="crg-divider"></div>', unsafe_allow_html=True)
 
-    # --- champion performance trend (left) + recent activity (right) ---
     col_trend, col_activity = st.columns([1, 1])
 
     with col_trend:
-        _section_header("Champion performance across promotions")
+        _section_header("Champion performance on frozen holdout")
         if len(champion_history) >= 2:
-            metric_name = next(iter(champion_history[0]["window_metrics"]))
+            metric_name = next(iter(champion_history[0]["holdout_metrics"]))
             metric_label = _metric_label(metric_name)
             xs = list(range(1, len(champion_history) + 1))
-            ys = [h["window_metrics"].get(metric_name) for h in champion_history]
+            ys = [h["holdout_metrics"].get(metric_name) for h in champion_history]
             rolled_back_xs = [x for x, h in zip(xs, champion_history) if h["rolled_back_at"] is not None]
             rolled_back_ys = [y for y, h in zip(ys, champion_history) if h["rolled_back_at"] is not None]
             hover_versions = [f"v{h['model_version']}" for h in champion_history]

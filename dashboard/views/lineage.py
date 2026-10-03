@@ -1,10 +1,3 @@
-"""Lineage: the full N-hop champion history as a timeline, each entry showing
-its metrics, promotion time, whether/where it was rolled back to, and how
-its metric moved relative to the champion it replaced - so a reviewer can
-see not just that a promotion happened, but whether it was actually an
-improvement.
-"""
-
 import textwrap
 
 import streamlit as st
@@ -14,10 +7,10 @@ from src.db.repository import get_champion_history
 
 def _delta_badge(delta: float, unit: str) -> str:
     if abs(delta) < 1e-6:
-        return '<span class="crg-timeline-delta flat">flat vs previous</span>'
+        return '<span class="crg-timeline-delta flat">flat vs previous (holdout)</span>'
     direction = "up" if delta > 0 else "down"
     sign = "+" if delta > 0 else ""
-    return f'<span class="crg-timeline-delta {direction}">{sign}{delta:.4f} {unit} vs previous</span>'
+    return f'<span class="crg-timeline-delta {direction}">{sign}{delta:.4f} {unit} vs previous (holdout)</span>'
 
 
 def render(engine) -> None:
@@ -49,18 +42,20 @@ def render(engine) -> None:
             else ""
         )
 
-        metrics_line = " &middot; ".join(
+        window_line = " &middot; ".join(
             f"{k}: {v:.4f}" for k, v in entry["window_metrics"].items()
         )
+        holdout_line = " &middot; ".join(
+            f"{k}: {v:.4f}" for k, v in entry["holdout_metrics"].items()
+        )
+        metrics_line = f"reference window {window_line} &middot; frozen holdout {holdout_line}"
 
-        # history is ascending; reversed(history)[i] is history[len-1-i], so
-        # the chronologically previous hop is one further into `history`
         prev_entry = history[len(history) - 1 - i - 1] if (len(history) - 1 - i - 1) >= 0 else None
         delta_html = ""
         if prev_entry is not None:
-            metric_name = next(iter(entry["window_metrics"]), None)
-            if metric_name and metric_name in prev_entry["window_metrics"]:
-                delta = entry["window_metrics"][metric_name] - prev_entry["window_metrics"][metric_name]
+            metric_name = next(iter(entry["holdout_metrics"]), None)
+            if metric_name and metric_name in prev_entry["holdout_metrics"]:
+                delta = entry["holdout_metrics"][metric_name] - prev_entry["holdout_metrics"][metric_name]
                 delta_html = " " + _delta_badge(delta, metric_name)
 
         rollback_line = (
@@ -71,10 +66,6 @@ def render(engine) -> None:
             else ""
         )
 
-        # All markup on single concatenated lines, not an indented multi-line
-        # f-string: 4+ leading spaces inside a markdown block gets misread
-        # as a code fence by Streamlit's markdown renderer, which is what
-        # produced literal "</div>" text in an earlier version of this view.
         items_html.append(
             f'<div class="{item_class}"><div class="crg-timeline-card">'
             f'<span class="crg-timeline-version">v{entry["model_version"]}</span>'
@@ -85,10 +76,6 @@ def render(engine) -> None:
             "</div></div>"
         )
 
-    # Built and rendered as ONE st.markdown call: Streamlit renders each
-    # st.markdown call as its own isolated DOM element, so a wrapper div
-    # opened in one call and closed in another never actually nests the
-    # content between them - the wrapping styling would silently do nothing.
     full_html = textwrap.dedent(
         f'<div class="crg-timeline">{"".join(items_html)}</div>'
     ).strip()

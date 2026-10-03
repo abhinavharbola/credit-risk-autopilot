@@ -1,9 +1,3 @@
-"""Drift: per-batch drift share over time from drift_check audit_log events,
-with retrain-triggered batches marked and the configured threshold drawn in,
-so a reviewer can see exactly why a given batch did or didn't trigger a
-retrain, not just that one did.
-"""
-
 import textwrap
 
 import pandas as pd
@@ -59,14 +53,15 @@ def render(engine) -> None:
             {
                 "batch": payload.get("batch"),
                 "drift_share": fingerprint.get("drift_share"),
-                "retrain_triggered": payload.get("retrain_triggered"),
+                "retrain_triggered": bool(payload.get("retrain_triggered")),
             }
         )
     df = pd.DataFrame(rows).sort_values("batch")
     triggered_df = df[df["retrain_triggered"]]
 
     latest_share = df.iloc[-1]["drift_share"]
-    is_drifting = latest_share is not None and latest_share >= RETRAIN_THRESHOLD
+    has_share = pd.notna(latest_share)
+    is_drifting = has_share and latest_share >= RETRAIN_THRESHOLD
     status_label = "Drifting" if is_drifting else "Stable"
     status_class = "crg-badge-stale" if is_drifting else "crg-badge-promoted"
 
@@ -81,7 +76,7 @@ def render(engine) -> None:
     _metric_block(
         [
             ("Batches checked", str(len(df))),
-            ("Current drift share", f"{latest_share:.3f}" if latest_share is not None else "—"),
+            ("Current drift share", f"{latest_share:.3f}" if has_share else "n/a"),
             ("Retrain threshold", f"{RETRAIN_THRESHOLD:.2f}"),
             ("Retrains triggered", str(len(triggered_df))),
         ]
