@@ -1,2 +1,6 @@
 line-length = 100
 target-version = "py312"
+
+[lint.per-file-ignores]
+"scripts/*.py" = ["E402"]
+"dashboard/app.py" = ["E402"]

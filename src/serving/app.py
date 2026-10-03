@@ -1,42 +1,25 @@
-"""FastAPI serving layer. Loads whatever is currently aliased @production,
-cached with explicit invalidation: every request checks the alias's current
-version via a cheap metadata call, and only reloads the actual model artifact
-if the version changed. This is what "picks up a promotion/rollback without
-a redeploy" means in practice.
-"""
-
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 import pandas as pd
 
 from src.model.train import score
-from src.utils.config import load_yaml
+from src.utils.config import MODEL_NAME, PRODUCTION_ALIAS, load_yaml
 from src.utils.logging import configure_logging, span
 from src.utils.model_cache import AliasedModelCache
 
 configure_logging()
 
-MODEL_NAME = "credit-risk-classifier"
+CACHE_TTL_SECONDS = 30.0
 
-_cache = AliasedModelCache(MODEL_NAME, "production")
+_cache = AliasedModelCache(MODEL_NAME, PRODUCTION_ALIAS, ttl_seconds=CACHE_TTL_SECONDS)
 
-# Same decision_threshold the gate uses for its McNemar diagnostic and for
-# recall/precision
-# (config/gate_config.yaml), not a hardcoded 0.5 - keeps predicted_label
-# here consistent with what governance actually classifies as positive,
-# even if the threshold is ever changed in config.
 _DECISION_THRESHOLD = load_yaml("config/gate_config.yaml")["decision_threshold"]
 
 app = FastAPI(title="Credit Risk Governance - Serving")
 
 
 class PredictionRequest(BaseModel):
-    """Field names use Python-safe identifiers; `alias` maps to the dataset's
-    actual hyphenated column names (e.g. NumberOfTime30-59DaysPastDueNotWorse
-    isn't a valid Python identifier). populate_by_name lets callers send
-    either form.
-    """
 
     RevolvingUtilizationOfUnsecuredLines: float = Field(ge=0)
     age: int = Field(ge=18, le=120)
@@ -57,6 +40,8 @@ class PredictionRequest(BaseModel):
 
 
 class PredictionResponse(BaseModel):
+    model_config = {"protected_namespaces": ()}
+
     predicted_prob: float
     predicted_label: int
     model_version: str
@@ -78,11 +63,6 @@ def model_info() -> dict[str, str]:
 
 @app.post("/predict", response_model=PredictionResponse)
 def predict(request: PredictionRequest) -> PredictionResponse:
-    """Scores a single applicant. Not persisted to the predictions table -
-    that table's batch_id semantics belong to the simulated governance loop
-    (src/orchestration/pipeline.py), not ad-hoc live requests. Extend this
-    endpoint to write through if serving real traffic later.
-    """
     try:
         model, version = _cache.get()
     except RuntimeError as e:

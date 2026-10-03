@@ -1,13 +1,3 @@
-"""Orchestrates one clock tick: score the batch with @production, release any
-now-due delayed labels, check for drift-triggered retrain, evaluate the gate
-if a challenger was trained, promote or reject, then check rollback.
-
-Every branch writes to audit_log - drift checks, gate evaluations (promoted
-AND rejected), rollback checks - not just the promote branch. This is the
-fix from the review: audit_log must record decisions, not just outcomes that
-changed state.
-"""
-
 from typing import Any
 
 import pandas as pd
@@ -16,6 +6,7 @@ from sqlalchemy.engine import Connection
 from src.data.drift_injection import inject_drift
 from src.db.repository import (
     get_labeled_predictions,
+    get_last_gate_batch,
     get_predictions_for_batch,
     insert_predictions_bulk,
     release_labels_bulk,
@@ -26,11 +17,17 @@ from src.gate.evaluate import compute_metric, evaluate_gate
 from src.model.features import ALL_COLUMNS, FEATURES, TARGET
 from src.model.train import score as score_model
 from src.model.train import train_challenger
-from src.orchestration.promote import check_rollback, promote_challenger
+from src.orchestration.promote import (
+    check_rollback,
+    promote_challenger,
+    reconcile_production_alias,
+)
+from src.utils.config import MODEL_NAME, PRODUCTION_ALIAS
 from src.utils.model_cache import AliasedModelCache
 
-MODEL_NAME = "credit-risk-classifier"
-_production_cache = AliasedModelCache(MODEL_NAME, "production")
+BASE_POOL_SAMPLE_SEED = 123
+
+_production_cache = AliasedModelCache(MODEL_NAME, PRODUCTION_ALIAS)
 
 
 def score_batch_with_production(
@@ -41,35 +38,12 @@ def score_batch_with_production(
     model_version: str,
     decision_threshold: float,
 ) -> None:
-    """Scores batch_df with the given (already-loaded) production model and
-    bulk-inserts one row per prediction (single INSERT, not a loop). Takes
-    the model as a parameter rather than loading it itself, so run_tick's
-    cached load is reused instead of a second independent load per tick.
-
-    decision_threshold comes from config/gate_config.yaml (the same value
-    the gate uses for its McNemar diagnostic and for recall/precision)
-    rather than a hardcoded 0.5, so predicted_label always reflects whatever
-    threshold governance is actually configured with.
-    """
     probs = score_model(model, batch_df)
-    # FEATURES only, not the full row: batch_df still carries TARGET at this
-    # point (it's the pretrain batch's original column set), and a full-row
-    # dict would silently store the ground-truth label into
-    # predictions.features at scoring time - before the delayed-labels
-    # window says it should be available at all.
-    #
-    # to_dict(orient="records") is column-driven, so it preserves each
-    # column's own dtype per record (age stays an int, DebtRatio stays a
-    # float). An earlier version built this from batch_df.iterrows(), which
-    # is row-driven: pandas has to give every row a single dtype, so a
-    # mixed int/float batch got silently upcast to all-float per row -
-    # integer features like age or delinquency counts were stored as floats
-    # in predictions.features with no error or warning.
     feature_records = batch_df[FEATURES].to_dict(orient="records")
     rows = [
         {
             "batch_id": batch_id,
-            "model_alias": "production",
+            "model_alias": PRODUCTION_ALIAS,
             "model_version": model_version,
             "features": features,
             "predicted_prob": float(p),
@@ -83,13 +57,7 @@ def score_batch_with_production(
 def release_due_labels(
     conn: Connection, due_batch_id: int, due_batch_df: pd.DataFrame
 ) -> list[dict[str, Any]]:
-    """Releases ground-truth labels for a batch whose delay has elapsed.
-    due_batch_df must be the exact dataframe scored at insert time for this
-    batch_id, same row order - that's what makes the id-to-label mapping
-    below correct. Returns the prediction rows (now labeled) for the caller
-    to use as the matched batch for gate evaluation.
-    """
-    rows = get_predictions_for_batch(conn, due_batch_id, model_alias="production")
+    rows = get_predictions_for_batch(conn, due_batch_id, model_alias=PRODUCTION_ALIAS)
     if len(rows) != len(due_batch_df):
         raise ValueError(
             f"prediction count ({len(rows)}) for batch {due_batch_id} doesn't "
@@ -97,8 +65,7 @@ def release_due_labels(
             "labels would be released against the wrong rows"
         )
     id_to_label = {
-        row["id"]: int(true_label)
-        for row, true_label in zip(rows, due_batch_df[TARGET])
+        row["id"]: int(true_label) for row, true_label in zip(rows, due_batch_df[TARGET])
     }
     release_labels_bulk(conn, due_batch_id, id_to_label)
     for row, true_label in zip(rows, due_batch_df[TARGET]):
@@ -106,55 +73,33 @@ def release_due_labels(
     return rows
 
 
-MAX_BASE_POOL_SAMPLE = 3000
-BASE_POOL_SAMPLE_SEED = 123
-
-
 def build_expanded_training_pool(
-    conn: Connection, base_training_pool_df: pd.DataFrame
+    conn: Connection,
+    base_training_pool_df: pd.DataFrame,
+    gate_config: dict[str, Any],
+    exclude_batch_ids: tuple[int, ...] = (),
 ) -> pd.DataFrame:
-    """Challenger retrains must incorporate newly-labeled data, not just the
-    original bootstrap training pool - otherwise every "challenger" is a
-    byte-identical clone of the champion (same data in, same deterministic
-    LogisticRegression out), and the gate can never tell them apart. This is
-    a fix for exactly that bug: an earlier version of run_tick always passed
-    the static base pool to train_challenger, so champion_metric and
-    challenger_metric came out identical on every single tick.
+    sample_size = gate_config["retrain_base_pool_sample"]
+    if len(base_training_pool_df) > sample_size:
+        base_sample = base_training_pool_df.sample(
+            n=sample_size, random_state=BASE_POOL_SAMPLE_SEED
+        )
+    else:
+        base_sample = base_training_pool_df
 
-    Reconstructs all labeled predictions released so far from the database
-    (the durable source of truth - see get_labeled_predictions) and appends
-    them to the base pool. Growing the training set this way, rather than
-    replacing it, also means the challenger never has less signal than the
-    champion did when it was last trained.
-
-    The base pool is capped at MAX_BASE_POOL_SAMPLE rows before concatenating.
-    Without this cap, a real run exposed a second bug: the full ~127K-row
-    base pool drowns out a few hundred newly-labeled (post-drift) rows into
-    a rounding error, so the challenger could never adapt enough to actually
-    beat the champion by more than sampling noise - 0 promotions across a
-    full 25-tick run despite real, measurable drift, every gate rejection
-    landing on "not statistically significant" because there was never
-    enough signal in the training data for a real difference to exist.
-    Subsampling the base pool lets accumulated post-drift labels carry
-    meaningful weight as they grow across ticks, letting the challenger's
-    coefficients actually shift to track drift.
-    """
-    labeled_rows = get_labeled_predictions(conn)
+    labeled_rows = get_labeled_predictions(
+        conn,
+        exclude_batch_ids=exclude_batch_ids,
+        limit=gate_config["retrain_max_labeled_rows"],
+    )
     if not labeled_rows:
-        return base_training_pool_df
+        return base_sample.reset_index(drop=True)
 
     incremental_df = pd.DataFrame([row["features"] for row in labeled_rows])
     incremental_df[TARGET] = [row["true_label"] for row in labeled_rows]
     incremental_df = incremental_df[ALL_COLUMNS]
 
-    if len(base_training_pool_df) > MAX_BASE_POOL_SAMPLE:
-        base_sample = base_training_pool_df.sample(
-            n=MAX_BASE_POOL_SAMPLE, random_state=BASE_POOL_SAMPLE_SEED
-        )
-    else:
-        base_sample = base_training_pool_df
-
-    return pd.concat([base_sample, incremental_df], ignore_index=True)
+    return pd.concat([base_sample[ALL_COLUMNS], incremental_df], ignore_index=True)
 
 
 def retrain_and_gate(
@@ -164,12 +109,8 @@ def retrain_and_gate(
     training_pool_df: pd.DataFrame,
     gate_config: dict[str, Any],
     run_name: str,
+    batch_index: int | None = None,
 ) -> dict[str, Any]:
-    """Trains a challenger, scores both champion and challenger on the
-    identical matched (now fully-labeled) batch, runs the gate, and writes
-    ONE audit_log entry regardless of outcome. Returns the gate decision plus
-    enough context to promote if it passed.
-    """
     challenger_run_id, challenger_version, challenger_model = train_challenger(
         training_pool_df, run_name=run_name
     )
@@ -184,6 +125,7 @@ def retrain_and_gate(
         conn,
         event_type="gate_evaluation",
         payload={
+            "batch": batch_index,
             "challenger_run_id": challenger_run_id,
             "challenger_version": challenger_version,
             **gate_result.to_dict(),
@@ -200,6 +142,84 @@ def retrain_and_gate(
     }
 
 
+def _cooldown_elapsed(conn: Connection, current_batch: int, cooldown_batches: int) -> bool:
+    last_gate_batch = get_last_gate_batch(conn)
+    return last_gate_batch is None or current_batch - last_gate_batch >= cooldown_batches
+
+
+def _retrain_stage(
+    conn: Connection,
+    current_batch: int,
+    due_batch_index: int,
+    due_batch_df: pd.DataFrame,
+    production_model,
+    training_pool_df: pd.DataFrame,
+    holdout_df: pd.DataFrame,
+    gate_config: dict[str, Any],
+) -> dict[str, Any]:
+    expanded_training_df = build_expanded_training_pool(
+        conn, training_pool_df, gate_config, exclude_batch_ids=(due_batch_index,)
+    )
+    gate_outcome = retrain_and_gate(
+        conn,
+        due_batch_df,
+        production_model,
+        expanded_training_df,
+        gate_config,
+        run_name=f"challenger-batch-{current_batch}",
+        batch_index=current_batch,
+    )
+    gate_result = gate_outcome["gate_result"]
+    stage: dict[str, Any] = {"gate": gate_result.to_dict(), "promoted_champion_history_id": None}
+
+    if not gate_result.promote:
+        return stage
+
+    metric_name = gate_config["primary_metric"]
+    holdout_prob = score_model(gate_outcome["challenger_model"], holdout_df)
+    holdout_metric_value = compute_metric(
+        holdout_df[TARGET].to_numpy(),
+        holdout_prob,
+        metric_name,
+        gate_config["decision_threshold"],
+    )
+    stage["promoted_champion_history_id"] = promote_challenger(
+        conn,
+        gate_outcome["challenger_version"],
+        {metric_name: holdout_metric_value},
+        {metric_name: gate_result.challenger_metric},
+        due_batch_df,
+        training_pool_df,
+        fingerprint_kwargs={"ks_pvalue_threshold": gate_config["drift_ks_pvalue_threshold"]},
+    )
+    return stage
+
+
+def _rollback_stage(
+    conn: Connection,
+    due_batch_df: pd.DataFrame,
+    production_model,
+    training_pool_df: pd.DataFrame,
+    gate_config: dict[str, Any],
+) -> dict[str, Any]:
+    metric_name = gate_config["primary_metric"]
+    live_prob = score_model(production_model, due_batch_df)
+    live_metric_value = compute_metric(
+        due_batch_df[TARGET].to_numpy(),
+        live_prob,
+        metric_name,
+        gate_config["decision_threshold"],
+    )
+    return check_rollback(
+        conn,
+        due_batch_df,
+        live_prob,
+        {metric_name: live_metric_value},
+        training_pool_df,
+        gate_config,
+    )
+
+
 def run_tick(
     conn: Connection,
     current_batch: int,
@@ -208,24 +228,9 @@ def run_tick(
     config: dict[str, Any],
     holdout_df: pd.DataFrame,
 ) -> dict[str, Any]:
-    """Runs the full governance loop for one simulated batch:
-    score -> release due labels -> drift check -> conditional retrain+gate
-    -> conditional promote -> rollback check.
+    gate_config = config["gate"]
 
-    raw_batches are the pre-drift pretrain batches; drift is injected here,
-    on demand, for whichever batch index is needed (current_batch, and the
-    due batch for label release). inject_drift is deterministic given
-    (batch_index, config), so recomputing it later for the due batch
-    reproduces byte-identical output to what was actually scored at the time
-    - no need to persist a separate "already drifted" copy per batch.
-
-    holdout_df is the frozen, never-drifted holdout carved out in
-    src/data/split.py. It is undrifted by construction, so it's scored as-is
-    (no inject_drift call) and used only for holdout_metrics at promotion
-    time - never for the gate or the rollback reference, both of which must
-    compare against the drifted live window instead (see README's "rollback
-    must reference the drifted window" design note).
-    """
+    reconcile_production_alias(conn)
     production_model, production_version = _production_cache.get()
 
     batch_df = inject_drift(raw_batches[current_batch], current_batch, config)
@@ -235,149 +240,87 @@ def run_tick(
         current_batch,
         production_model,
         production_version,
-        config["gate"]["decision_threshold"],
+        gate_config["decision_threshold"],
     )
 
-    delay = config["delayed_labels"]["delay_batches"]
-    due_batch_index = current_batch - delay
-    result: dict[str, Any] = {"batch": current_batch}
+    due_batch_index = current_batch - config["delayed_labels"]["delay_batches"]
+    has_due_batch = due_batch_index >= 0
 
-    triggered, fingerprint = check_retrain_trigger(
-        batch_df, training_pool_df, config["gate"]["retrain_drift_share_threshold"]
+    drift_detected, fingerprint = check_retrain_trigger(
+        batch_df,
+        training_pool_df,
+        gate_config["retrain_drift_share_threshold"],
+        ks_pvalue_threshold=gate_config["drift_ks_pvalue_threshold"],
+    )
+    retrain_triggered = (
+        drift_detected
+        and has_due_batch
+        and _cooldown_elapsed(conn, current_batch, gate_config["retrain_cooldown_batches"])
     )
     write_audit_log(
         conn,
         event_type="drift_check",
         payload={
             "batch": current_batch,
-            "retrain_triggered": triggered,
+            "drift_detected": drift_detected,
+            "retrain_triggered": retrain_triggered,
             "fingerprint": fingerprint,
         },
     )
-    result["retrain_triggered"] = triggered
 
-    if due_batch_index >= 0:
-        due_batch_df = inject_drift(raw_batches[due_batch_index], due_batch_index, config)
-        release_due_labels(conn, due_batch_index, due_batch_df)
-        result["labels_released_for_batch"] = due_batch_index
+    result: dict[str, Any] = {
+        "batch": current_batch,
+        "drift_detected": drift_detected,
+        "retrain_triggered": retrain_triggered,
+    }
+    if not has_due_batch:
+        return result
 
-        # Tracks whether this exact tick promoted a challenger, so the
-        # rollback check below can be skipped explicitly rather than run as
-        # a trivial no-op against itself (see the comment at that check).
-        promoted_this_tick = False
+    due_batch_df = inject_drift(raw_batches[due_batch_index], due_batch_index, config)
+    release_due_labels(conn, due_batch_index, due_batch_df)
+    result["labels_released_for_batch"] = due_batch_index
 
-        if triggered:
-            expanded_training_df = build_expanded_training_pool(conn, training_pool_df)
-            gate_outcome = retrain_and_gate(
-                conn,
-                due_batch_df,
-                production_model,
-                expanded_training_df,
-                config["gate"],
-                run_name=f"challenger-batch-{current_batch}",
-            )
-            result["gate"] = gate_outcome["gate_result"].to_dict()
+    promoted_champion_history_id = None
+    if retrain_triggered:
+        stage = _retrain_stage(
+            conn,
+            current_batch,
+            due_batch_index,
+            due_batch_df,
+            production_model,
+            training_pool_df,
+            holdout_df,
+            gate_config,
+        )
+        result["gate"] = stage["gate"]
+        promoted_champion_history_id = stage["promoted_champion_history_id"]
+        if promoted_champion_history_id is not None:
+            result["promoted_champion_history_id"] = promoted_champion_history_id
 
-            if gate_outcome["gate_result"].promote:
-                window_metrics = {
-                    config["gate"]["primary_metric"]: gate_outcome["gate_result"].challenger_metric
-                }
-                # Real holdout evaluation, not a copy of window_metrics: the
-                # challenger is scored on the frozen, never-drifted holdout
-                # so champion_history.holdout_metrics reflects an actual
-                # holdout number, distinct from window_metrics (the drifted
-                # window it was gated against). Conflating the two used to
-                # mean holdout_metrics was just window_metrics under a
-                # different key post-bootstrap.
-                holdout_prob = score_model(
-                    gate_outcome["challenger_model"], holdout_df
-                )
-                holdout_metric_value = compute_metric(
-                    holdout_df[TARGET].to_numpy(),
-                    holdout_prob,
-                    config["gate"]["primary_metric"],
-                    config["gate"]["decision_threshold"],
-                )
-                holdout_metrics = {config["gate"]["primary_metric"]: holdout_metric_value}
-                champion_history_id = promote_challenger(
-                    conn,
-                    gate_outcome["challenger_version"],
-                    holdout_metrics,
-                    window_metrics,
-                    due_batch_df,
-                    training_pool_df,
-                )
-                result["promoted_champion_history_id"] = champion_history_id
-                promoted_this_tick = True
-
-                # A promotion just moved the @production alias in MLflow.
-                # production_model/production_version above were loaded at
-                # the top of this tick, before that happened - reusing them
-                # for the rollback check below would score the just-replaced
-                # model instead of the model that's actually live now, and
-                # compare it against the newly-promoted challenger's stored
-                # window_metrics. Reload from the cache so the rollback
-                # check below always evaluates the model that's actually
-                # aliased @production at this point in the tick.
-                production_model, production_version = _production_cache.get()
-
-        if promoted_this_tick:
-            # A promotion on this exact tick stored window_metrics computed
-            # on due_batch_df with the challenger that is now @production.
-            # Running check_rollback here would score that same model on
-            # that same due_batch_df again and compare the result against
-            # the window_metrics just derived from it - a comparison against
-            # itself, guaranteed to show ~zero drop and a fresh fingerprint
-            # every time. That's not wrong, but it's a redundant no-op
-            # dressed up as a real check, and logging it as an ordinary
-            # rollback_check with rollback_triggered=False makes the audit
-            # trail look like a real degradation check happened when it
-            # structurally couldn't have found anything. Skip it explicitly
-            # and say why, instead of letting it run and pass trivially.
-            skip_reason = (
-                "skipped: this tick promoted a challenger, live window is "
-                "the same window window_metrics was just computed from - "
-                "rollback comparison would be against itself"
-            )
-            write_audit_log(
-                conn,
-                event_type="rollback_check",
-                payload={
-                    "champion_history_id": result["promoted_champion_history_id"],
-                    "rollback_triggered": False,
-                    "skipped": True,
-                    "reason": skip_reason,
-                },
-            )
-            rollback_result = {
+    if promoted_champion_history_id is not None:
+        skip_reason = (
+            "skipped: this tick promoted a challenger, live window is "
+            "the same window window_metrics was just computed from"
+        )
+        write_audit_log(
+            conn,
+            event_type="rollback_check",
+            payload={
+                "champion_history_id": promoted_champion_history_id,
                 "rollback_triggered": False,
-                "rollback_executed": False,
                 "skipped": True,
                 "reason": skip_reason,
-            }
-        else:
-            live_prob = score_model(production_model, due_batch_df)
-            live_metric_value = compute_metric(
-                due_batch_df[TARGET].to_numpy(),
-                live_prob,
-                config["gate"]["primary_metric"],
-                config["gate"]["decision_threshold"],
-            )
-            live_metrics = {config["gate"]["primary_metric"]: live_metric_value}
-            rollback_result = check_rollback(
-                conn,
-                due_batch_df,
-                live_prob,
-                live_metrics,
-                training_pool_df,
-                config["gate"]["primary_metric"],
-                config["gate"]["decision_threshold"],
-                config["gate"]["rollback_metric_drop_threshold"],
-                config["gate"]["staleness_drift_share_delta_threshold"],
-                config["gate"]["staleness_column_pvalue_delta_threshold"],
-                bootstrap_resamples=config["gate"]["bootstrap_resamples"],
-                significance_alpha=config["gate"]["significance_alpha"],
-            )
-        result["rollback"] = rollback_result
+            },
+        )
+        result["rollback"] = {
+            "rollback_triggered": False,
+            "rollback_executed": False,
+            "skipped": True,
+            "reason": skip_reason,
+        }
+    else:
+        result["rollback"] = _rollback_stage(
+            conn, due_batch_df, production_model, training_pool_df, gate_config
+        )
 
     return result

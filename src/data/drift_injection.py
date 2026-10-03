@@ -1,19 +1,3 @@
-"""Recession-scenario drift injection.
-
-Persistent feature drift: shift+scale DebtRatio and
-RevolvingUtilizationOfUnsecuredLines upward, shrink MonthlyIncome, from a
-configured batch onward, and it never turns off.
-
-Temporary concept drift: blend delinquent-borrower rows toward the
-non-delinquent centroid, active only within a fixed batch window, then reverts.
-
-Both are deterministic (fixed shift/scale/blend math, no randomness), so any
-batch's drift is independently reproducible regardless of call order given
-the same (batch_index, params) - see inject_drift's docstring below for why
-no seed is threaded through this module. Parameters are read from
-config/drift_params.yaml, never hardcoded here.
-"""
-
 import pandas as pd
 
 from src.model.features import TARGET
@@ -22,9 +6,6 @@ from src.model.features import TARGET
 def apply_persistent_drift(
     batch_df: pd.DataFrame, batch_index: int, params: dict
 ) -> pd.DataFrame:
-    """Applies the persistent shift/scale if batch_index >= start_batch.
-    No-op otherwise. Deterministic, no randomness needed for this component.
-    """
     p = params["persistent_drift"]
     if batch_index < p["start_batch"]:
         return batch_df
@@ -34,7 +15,6 @@ def apply_persistent_drift(
         shift = spec.get("shift", 0.0)
         scale = spec.get("scale", 1.0)
         if col == "MonthlyIncome":
-            # shift is a fractional shrink for income, not additive
             out[col] = out[col] * (1 + shift) * scale
         else:
             out[col] = (out[col] + shift) * scale
@@ -44,26 +24,21 @@ def apply_persistent_drift(
 def apply_temporary_concept_drift(
     batch_df: pd.DataFrame, batch_index: int, params: dict
 ) -> pd.DataFrame:
-    """Blends delinquent-borrower rows toward the non-delinquent centroid on the
-    configured columns, only while start_batch <= batch_index < end_batch.
-    Reverts automatically outside the window since it's simply not applied.
-    """
     p = params["temporary_concept_drift"]
     if not (p["start_batch"] <= batch_index < p["end_batch"]):
+        return batch_df
+
+    delinquent_mask = batch_df[TARGET] == 1
+    non_delinquent_mask = batch_df[TARGET] == 0
+    if not delinquent_mask.any() or not non_delinquent_mask.any():
         return batch_df
 
     out = batch_df.copy()
     columns = p["columns"]
     blend_ratio = p["blend_ratio"]
 
-    # blending produces fractional values, but several of these columns
-    # (the delinquency counts) start out as int64 in the raw dataset -
-    # cast to float first so the assignment below doesn't trigger pandas'
-    # "incompatible dtype" warning (a hard error in future pandas versions)
     out[columns] = out[columns].astype(float)
-
-    non_delinquent_centroid = out.loc[out[TARGET] == 0, columns].mean()
-    delinquent_mask = out[TARGET] == 1
+    non_delinquent_centroid = out.loc[non_delinquent_mask, columns].mean()
 
     out.loc[delinquent_mask, columns] = (
         out.loc[delinquent_mask, columns] * (1 - blend_ratio)
@@ -73,16 +48,5 @@ def apply_temporary_concept_drift(
 
 
 def inject_drift(batch_df: pd.DataFrame, batch_index: int, params: dict) -> pd.DataFrame:
-    """Applies persistent drift then temporary concept drift, in that order,
-    for a single batch. Both are governed entirely by params (batch
-    boundaries, shift/scale/blend values) so the exact drift shown to a
-    reviewer is always reproducible by re-running with the same config.
-    Neither transform is actually stochastic (both are deterministic
-    mean/shift/scale math), so no seed is threaded through here despite
-    config/drift_params.yaml having one at the top level - that seed exists
-    for other seeded operations in this project (e.g. src/data/split.py's
-    batch shuffling), not for drift injection itself.
-    """
     out = apply_persistent_drift(batch_df, batch_index, params)
-    out = apply_temporary_concept_drift(out, batch_index, params)
-    return out
+    return apply_temporary_concept_drift(out, batch_index, params)

@@ -1,15 +1,4 @@
-"""Single isolated, stateless call (Groq) to explain one logged decision in
-plain language. Supporting feature only, not a pillar of the project
-(section 3): nothing in the governance loop calls this or blocks on it -
-it's read-only sugar for the audit_log dashboard view (dashboard/views/
-audit_log.py).
-
-Fails soft, never raises: a missing GROQ_API_KEY, a missing `groq` install,
-or an API error all return a short placeholder string instead of an
-exception, since a broken LLM call should never take down the audit log
-view it's decorating.
-"""
-
+import json
 import os
 from typing import Any
 
@@ -20,16 +9,15 @@ load_dotenv()
 _SYSTEM_PROMPT = (
     "You are explaining one automated credit-risk-governance decision to a "
     "reviewer. You are given an event_type (gate_evaluation, promotion, "
-    "rollback, rollback_check, drift_check, or label_release) and its JSON "
-    "payload from an audit log. Write 2-3 plain-language sentences: what "
-    "happened and why, grounded only in the numbers already present in the "
-    "payload. No preamble, no restating the raw JSON, no speculation beyond "
-    "what the payload shows."
+    "rollback, rollback_check, drift_check, label_release, clock_advance, or "
+    "alias_reconciled) and its JSON payload from an audit log. Write 2-3 "
+    "plain-language sentences: what happened and why, grounded only in the "
+    "numbers already present in the payload. No preamble, no restating the "
+    "raw JSON, no speculation beyond what the payload shows."
 )
 
 
 def explain_event(event_type: str, payload: dict[str, Any]) -> str:
-    """Returns a short plain-language explanation of one audit_log event."""
     api_key = os.environ.get("GROQ_API_KEY")
     if not api_key:
         return "LLM explanation unavailable: GROQ_API_KEY is not set."
@@ -46,12 +34,18 @@ def explain_event(event_type: str, payload: dict[str, Any]) -> str:
                 {"role": "system", "content": _SYSTEM_PROMPT},
                 {
                     "role": "user",
-                    "content": f"event_type: {event_type}\npayload: {payload}",
+                    "content": (
+                        f"event_type: {event_type}\n"
+                        f"payload: {json.dumps(payload, default=str)}"
+                    ),
                 },
             ],
             temperature=0.2,
-            max_tokens=200,
+            max_tokens=1500,
         )
-        return response.choices[0].message.content.strip()
+        content = (response.choices[0].message.content or "").strip()
+        if not content:
+            return "LLM explanation unavailable: the model returned no text."
+        return content
     except Exception as e:
         return f"LLM explanation unavailable: {e}"

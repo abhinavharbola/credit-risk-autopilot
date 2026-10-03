@@ -1,34 +1,31 @@
-"""Bulk read/write helpers for predictions, labels, audit_log, champion_history,
-and pipeline_state. Every function that touches N rows does it in one query
-(4.7), never a Python loop of N round trips. Every function takes an open
-SQLAlchemy Connection so callers control the transaction boundary.
-"""
-
 import json
-from typing import Any
+from typing import Any, Sequence
 
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 
+def _to_builtin(value: Any) -> Any:
+    if hasattr(value, "item"):
+        return value.item()
+    return str(value)
+
+
+def _dumps(value: Any) -> str:
+    return json.dumps(value, default=_to_builtin)
+
+
 def write_audit_log(conn: Connection, event_type: str, payload: dict[str, Any]) -> None:
-    """Every governance decision goes through here: gate evaluations
-    (promoted and rejected), promotions, rollbacks, drift checks, label
-    releases, clock advances. Not just the promote branch.
-    """
     conn.execute(
         text(
             "INSERT INTO audit_log (event_type, event_payload) "
             "VALUES (:event_type, CAST(:payload AS JSONB))"
         ),
-        {"event_type": event_type, "payload": json.dumps(payload)},
+        {"event_type": event_type, "payload": _dumps(payload)},
     )
 
 
 def insert_predictions_bulk(conn: Connection, rows: list[dict[str, Any]]) -> None:
-    """rows: batch_id, model_alias, model_version, features (dict),
-    predicted_prob, predicted_label. One batched INSERT, not a loop.
-    """
     if not rows:
         return
     payload = [
@@ -36,7 +33,7 @@ def insert_predictions_bulk(conn: Connection, rows: list[dict[str, Any]]) -> Non
             "batch_id": r["batch_id"],
             "model_alias": r["model_alias"],
             "model_version": r["model_version"],
-            "features": json.dumps(r["features"]),
+            "features": _dumps(r["features"]),
             "predicted_prob": r["predicted_prob"],
             "predicted_label": r["predicted_label"],
         }
@@ -53,21 +50,7 @@ def insert_predictions_bulk(conn: Connection, rows: list[dict[str, Any]]) -> Non
     )
 
 
-def release_labels_bulk(
-    conn: Connection, batch_id: int, id_to_label: dict[int, int]
-) -> None:
-    """Bulk-updates true_label for a whole batch's worth of predictions in a
-    single UPDATE ... FROM unnest(...), then writes ONE audit_log event
-    describing the release (per-row updates are not individually logged,
-    the release itself is the auditable event per schema note 6a).
-
-    ids/labels are passed as bound array parameters (unnest'd server-side),
-    not interpolated into the SQL text. An earlier version built the VALUES
-    list via an f-string, safe in practice only because both fields were
-    cast through int() first - correct, but fragile, and inconsistent with
-    every other query in this file. This version stays a single statement
-    (4.7: never a Python loop of N round trips) with no manual escaping.
-    """
+def release_labels_bulk(conn: Connection, batch_id: int, id_to_label: dict[int, int]) -> None:
     if not id_to_label:
         return
 
@@ -98,39 +81,31 @@ def release_labels_bulk(
 
 
 def get_labeled_predictions(
-    conn: Connection, model_alias: str = "production"
+    conn: Connection,
+    model_alias: str = "production",
+    exclude_batch_ids: Sequence[int] = (),
+    limit: int | None = None,
 ) -> list[dict[str, Any]]:
-    """All predictions whose true_label has been released so far, for
-    reconstructing an expanding challenger training set (see
-    src/orchestration/pipeline.py:build_expanded_training_pool). Reads from
-    Postgres rather than any in-memory accumulation, since advance_clock.py
-    runs as a fresh process per cron invocation and can't rely on state
-    persisting between ticks - the database is the only durable source of
-    "what have we actually observed and labeled so far."
-    """
-    result = conn.execute(
-        text(
-            "SELECT features, true_label FROM predictions "
-            "WHERE true_label IS NOT NULL AND model_alias = :model_alias"
-        ),
-        {"model_alias": model_alias},
+    query = (
+        "SELECT features, true_label FROM predictions "
+        "WHERE true_label IS NOT NULL AND model_alias = :model_alias "
+        "AND batch_id <> ALL(CAST(:excluded AS integer[])) "
+        "ORDER BY batch_id DESC, id DESC"
     )
+    params: dict[str, Any] = {
+        "model_alias": model_alias,
+        "excluded": [int(b) for b in exclude_batch_ids],
+    }
+    if limit is not None:
+        query += " LIMIT :limit"
+        params["limit"] = int(limit)
+    result = conn.execute(text(query), params)
     return [dict(row._mapping) for row in result]
 
 
 def get_predictions_for_batch(
     conn: Connection, batch_id: int, model_alias: str | None = None
 ) -> list[dict[str, Any]]:
-    """ORDER BY id matters here, not just cosmetic: release_due_labels
-    (src/orchestration/pipeline.py) zips these rows against a dataframe by
-    position, assuming row N here corresponds to row N of the batch that was
-    scored. Postgres does not guarantee result order for a plain SELECT
-    without ORDER BY - an index scan, a parallel scan, or table bloat could
-    all return rows out of insertion order with no error, silently
-    attaching a label to the wrong prediction. Ordering by id (assigned in
-    insertion order within insert_predictions_bulk's single statement)
-    reproduces the guarantee the caller actually needs.
-    """
     query = "SELECT * FROM predictions WHERE batch_id = :batch_id"
     params: dict[str, Any] = {"batch_id": batch_id}
     if model_alias is not None:
@@ -142,9 +117,6 @@ def get_predictions_for_batch(
 
 
 def insert_champion_history(conn: Connection, row: dict[str, Any]) -> int:
-    """row: model_version, holdout_metrics (dict), window_metrics (dict),
-    drift_fingerprint (dict). Returns the new champion_history id.
-    """
     result = conn.execute(
         text(
             """
@@ -157,17 +129,17 @@ def insert_champion_history(conn: Connection, row: dict[str, Any]) -> int:
             """
         ),
         {
-            "model_version": row["model_version"],
-            "holdout_metrics": json.dumps(row["holdout_metrics"]),
-            "window_metrics": json.dumps(row["window_metrics"]),
-            "drift_fingerprint": json.dumps(row["drift_fingerprint"]),
+            "model_version": str(row["model_version"]),
+            "holdout_metrics": _dumps(row["holdout_metrics"]),
+            "window_metrics": _dumps(row["window_metrics"]),
+            "drift_fingerprint": _dumps(row["drift_fingerprint"]),
         },
     )
     return result.scalar_one()
 
 
 def get_champion_history(conn: Connection) -> list[dict[str, Any]]:
-    result = conn.execute(text("SELECT * FROM champion_history ORDER BY promoted_at ASC"))
+    result = conn.execute(text("SELECT * FROM champion_history ORDER BY id ASC"))
     return [dict(row._mapping) for row in result]
 
 
@@ -176,7 +148,7 @@ def get_latest_champion(conn: Connection) -> dict[str, Any] | None:
         text(
             "SELECT * FROM champion_history "
             "WHERE rolled_back_at IS NULL "
-            "ORDER BY promoted_at DESC LIMIT 1"
+            "ORDER BY id DESC LIMIT 1"
         )
     )
     row = result.first()
@@ -184,10 +156,6 @@ def get_latest_champion(conn: Connection) -> dict[str, Any] | None:
 
 
 def mark_reference_stale(conn: Connection, champion_history_id: int, stale: bool) -> None:
-    """Flags whether the stored rollback reference (fingerprint + window
-    metrics) has diverged from live traffic and can no longer be trusted for
-    rollback comparisons (4.1).
-    """
     conn.execute(
         text("UPDATE champion_history SET reference_stale = :stale WHERE id = :id"),
         {"stale": stale, "id": champion_history_id},
@@ -205,21 +173,40 @@ def record_rollback(
             WHERE id = :id
             """
         ),
-        {"rolled_back_to_version": rolled_back_to_version, "id": champion_history_id},
+        {"rolled_back_to_version": str(rolled_back_to_version), "id": champion_history_id},
     )
 
 
 def get_audit_log(
-    conn: Connection, event_type: str | None = None, limit: int = 500
+    conn: Connection,
+    event_type: str | None = None,
+    limit: int = 500,
+    payload_equals: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
-    query = "SELECT * FROM audit_log"
+    query = "SELECT * FROM audit_log WHERE TRUE"
     params: dict[str, Any] = {"limit": limit}
     if event_type:
-        query += " WHERE event_type = :event_type"
+        query += " AND event_type = :event_type"
         params["event_type"] = event_type
-    query += " ORDER BY created_at DESC LIMIT :limit"
+    for i, (key, value) in enumerate((payload_equals or {}).items()):
+        query += f" AND event_payload ->> :pk{i} = :pv{i}"
+        params[f"pk{i}"] = key
+        params[f"pv{i}"] = value
+    query += " ORDER BY created_at DESC, id DESC LIMIT :limit"
     result = conn.execute(text(query), params)
     return [dict(row._mapping) for row in result]
+
+
+def get_last_gate_batch(conn: Connection) -> int | None:
+    result = conn.execute(
+        text(
+            "SELECT (event_payload ->> 'batch')::integer FROM audit_log "
+            "WHERE event_type = 'gate_evaluation' AND event_payload ->> 'batch' IS NOT NULL "
+            "ORDER BY id DESC LIMIT 1"
+        )
+    )
+    row = result.first()
+    return int(row[0]) if row is not None and row[0] is not None else None
 
 
 def get_pipeline_state(conn: Connection) -> dict[str, Any]:
@@ -228,22 +215,16 @@ def get_pipeline_state(conn: Connection) -> dict[str, Any]:
 
 
 def advance_pipeline_state(conn: Connection, expected_version: int) -> bool:
-    """The single writer for pipeline_state (4.6a). Advances current_batch by
-    1 and bumps version, but only if the row's version still matches
-    expected_version (optimistic concurrency). If another caller already
-    advanced it, this is a no-op and returns False, so a duplicate or
-    overlapping invocation (cron racing a manual run) never double-advances.
-    """
     result = conn.execute(
         text(
             """
             UPDATE pipeline_state
             SET current_batch = current_batch + 1, version = version + 1, updated_at = now()
             WHERE id = 1 AND version = :expected_version
+              AND id IN (SELECT id FROM pipeline_state WHERE id = 1 FOR UPDATE SKIP LOCKED)
             RETURNING current_batch, version
             """
         ),
         {"expected_version": expected_version},
     )
-    row = result.first()
-    return row is not None
+    return result.first() is not None

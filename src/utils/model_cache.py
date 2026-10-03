@@ -1,19 +1,5 @@
-"""Shared model-loading cache: reloads a registered model's sklearn artifact
-only when the given alias's version has actually changed. Used by both the
-serving layer (src/serving/app.py) and the orchestration loop
-(src/orchestration/pipeline.py), so there's exactly one cache
-implementation, not two independently-written copies that could drift apart.
-
-Loads via mlflow.sklearn.load_model() (the native flavor), not
-mlflow.pyfunc.load_model(). pyfunc wraps sklearn models behind a generic
-.predict() that returns hard class labels and doesn't expose
-.predict_proba() at all - this project needs actual probabilities
-(src/model/train.py's score() calls .predict_proba()), and needs the
-production model to behave identically to the challenger model returned
-directly from train_challenger(), not a different wrapper with a different
-interface.
-"""
-
+import threading
+import time
 from typing import Any
 
 import mlflow
@@ -21,31 +7,36 @@ import mlflow.sklearn
 
 
 class AliasedModelCache:
-    """get() is safe to call as often as needed (once per request, once per
-    tick): the alias-version metadata lookup is cheap, the actual model
-    artifact download only happens when the alias has moved since the last
-    call.
-    """
-
-    def __init__(self, model_name: str, alias: str):
+    def __init__(self, model_name: str, alias: str, ttl_seconds: float = 0.0):
         self.model_name = model_name
         self.alias = alias
+        self.ttl_seconds = ttl_seconds
         self._version: str | None = None
         self._model = None
+        self._checked_at = 0.0
+        self._lock = threading.Lock()
 
     def get(self) -> tuple[Any, str]:
-        client = mlflow.MlflowClient()
-        try:
-            version_info = client.get_model_version_by_alias(self.model_name, self.alias)
-        except Exception as e:
-            raise RuntimeError(
-                f"no model is currently aliased @{self.alias} for {self.model_name}"
-            ) from e
+        with self._lock:
+            now = time.monotonic()
+            if (
+                self._model is not None
+                and self.ttl_seconds > 0
+                and now - self._checked_at < self.ttl_seconds
+            ):
+                return self._model, self._version
 
-        if version_info.version != self._version:
-            self._model = mlflow.sklearn.load_model(
-                f"models:/{self.model_name}@{self.alias}"
-            )
-            self._version = version_info.version
+            client = mlflow.MlflowClient()
+            try:
+                version_info = client.get_model_version_by_alias(self.model_name, self.alias)
+            except Exception as e:
+                raise RuntimeError(
+                    f"no model is currently aliased @{self.alias} for {self.model_name}"
+                ) from e
 
-        return self._model, self._version
+            version = str(version_info.version)
+            if version != self._version:
+                self._model = mlflow.sklearn.load_model(f"models:/{self.model_name}/{version}")
+                self._version = version
+            self._checked_at = now
+            return self._model, self._version

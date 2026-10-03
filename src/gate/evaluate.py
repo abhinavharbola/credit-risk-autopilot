@@ -1,37 +1,3 @@
-"""Pure gate logic. Zero I/O, most heavily tested file in the repo (build
-order step 4). Three gates, all must pass to promote a challenger:
-
-  1. tolerance-band  - challenger is not meaningfully worse than champion.
-  2. dominance       - challenger genuinely beats champion, not just a tie
-                        within the tolerance band.
-  3. significance    - that improvement is statistically distinguishable
-                        from noise, tested with a paired bootstrap CI
-                        directly on the primary metric's delta (matched
-                        champion/challenger predictions over the identical
-                        batch).
-
-Primary metric is AUC-PR (documented in config/gate_config.yaml), not
-accuracy, since accuracy is close to useless at ~6.7% positive rate.
-
-Significance fix (metric-consistency): this used to route through McNemar's
-test (paired hard-label agreement at `decision_threshold`) whenever a batch
-had enough discordant pairs, falling back to a bootstrap CI on the metric
-delta only below that count. That tested two different statistical
-questions depending on the batch: McNemar asks whether 0.5-threshold
-classification agreement differs from 50/50, not whether the threshold-free
-ranking metric (AUC-PR) that tolerance/dominance actually decide on moved by
-a real amount. A challenger could clear McNemar on hard-label agreement
-while its AUC-PR delta was noise, or the reverse. The bootstrap CI on the
-metric delta answers the right question at any sample size (it's already
-what the low-discordant-pair fallback used), so it's now the only test that
-gates `passed_significance`, unconditionally. McNemar is still computed and
-reported under `details["mcnemar_*"]` as a secondary diagnostic (agreement
-between the two models' hard labels is still useful context for a reviewer),
-it just no longer decides promotion. `mcnemar_min_discordant_pairs` is kept
-in config as the threshold `details["mcnemar_reliable"]` is judged against,
-not as a routing switch.
-"""
-
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
@@ -51,14 +17,11 @@ class GateResult:
     passed_tolerance: bool
     passed_dominance: bool
     significance_method: str
-    significance_stat: float | None
-    significance_pvalue: float | None
     passed_significance: bool
     reason: str
     details: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        """JSON-serializable form for audit_log.event_payload."""
         return asdict(self)
 
 
@@ -68,7 +31,6 @@ def compute_metric(y_true, y_prob, metric: str, decision_threshold: float) -> fl
 
     if metric == "auc_pr":
         if y_true.sum() == 0:
-            # no positives in this slice, AUC-PR is undefined; treat as worst case
             return 0.0
         return float(average_precision_score(y_true, y_prob))
     if metric == "recall_at_threshold":
@@ -83,77 +45,38 @@ def compute_metric(y_true, y_prob, metric: str, decision_threshold: float) -> fl
 def _mcnemar(
     champion_correct: np.ndarray, challenger_correct: np.ndarray
 ) -> tuple[float, float, int]:
-    """Paired McNemar test with continuity correction on the classification
-    (correct/incorrect vs y_true) agreement between champion and challenger.
-    Returns (chi2_stat, pvalue, n_discordant_pairs).
-    """
     b = int(np.sum(champion_correct & ~challenger_correct))
     c = int(np.sum(~champion_correct & challenger_correct))
     n_discordant = b + c
     if n_discordant == 0:
         return 0.0, 1.0, 0
     chi2 = (abs(b - c) - 1) ** 2 / n_discordant
-    pvalue = float(1 - stats.chi2.cdf(chi2, df=1))
+    pvalue = float(stats.chi2.sf(chi2, df=1))
     return float(chi2), pvalue, n_discordant
 
 
-def bootstrap_metric_ci(
+def bootstrap_delta_ci(
     y_true,
-    y_prob,
+    baseline_prob,
+    candidate_prob,
     metric: str,
     decision_threshold: float,
     n_resamples: int,
     seed: int,
     alpha: float,
 ) -> tuple[float, float]:
-    """Bootstrap CI on a single model's metric over one batch, resampling
-    rows with replacement. Public (unlike _bootstrap_delta_ci above, which
-    is champion-vs-challenger specific): used by the rollback check
-    (src/orchestration/promote.py) to confirm an apparent metric drop holds
-    up across resamples of the batch, not just a single noisy point
-    estimate from ~200 rows and a handful of positives - the same class of
-    small-sample risk the gate's own significance check already guards
-    against on the promotion side. Before this, rollback triggered on a
-    raw point-estimate threshold with no equivalent safeguard.
-    """
-    rng = np.random.default_rng(seed)
     y_true = np.asarray(y_true)
-    y_prob = np.asarray(y_prob)
-    n = len(y_true)
-    values = np.empty(n_resamples)
-
-    for i in range(n_resamples):
-        idx = rng.integers(0, n, size=n)
-        values[i] = compute_metric(y_true[idx], y_prob[idx], metric, decision_threshold)
-
-    lower = float(np.percentile(values, 100 * (alpha / 2)))
-    upper = float(np.percentile(values, 100 * (1 - alpha / 2)))
-    return lower, upper
-
-
-def _bootstrap_delta_ci(
-    y_true: np.ndarray,
-    champion_prob: np.ndarray,
-    challenger_prob: np.ndarray,
-    metric: str,
-    decision_threshold: float,
-    n_resamples: int,
-    seed: int,
-    alpha: float,
-) -> tuple[float, float]:
-    """Bootstrap CI on (challenger_metric - champion_metric), resampling
-    matched rows with replacement so champion and challenger always see the
-    exact same resampled indices in each iteration.
-    """
+    baseline_prob = np.asarray(baseline_prob)
+    candidate_prob = np.asarray(candidate_prob)
     rng = np.random.default_rng(seed)
     n = len(y_true)
     deltas = np.empty(n_resamples)
 
     for i in range(n_resamples):
         idx = rng.integers(0, n, size=n)
-        champ_m = compute_metric(y_true[idx], champion_prob[idx], metric, decision_threshold)
-        chal_m = compute_metric(y_true[idx], challenger_prob[idx], metric, decision_threshold)
-        deltas[i] = chal_m - champ_m
+        baseline_m = compute_metric(y_true[idx], baseline_prob[idx], metric, decision_threshold)
+        candidate_m = compute_metric(y_true[idx], candidate_prob[idx], metric, decision_threshold)
+        deltas[i] = candidate_m - baseline_m
 
     lower = float(np.percentile(deltas, 100 * (alpha / 2)))
     upper = float(np.percentile(deltas, 100 * (1 - alpha / 2)))
@@ -167,14 +90,6 @@ def evaluate_gate(
     config: dict[str, Any],
     seed: int = 42,
 ) -> GateResult:
-    """Evaluates whether challenger should be promoted over champion.
-
-    champion_prob, challenger_prob, y_true must all be the same length and
-    the same row order: both models scored on the identical newly-labeled
-    batch. Enforcing that alignment is the caller's job (see
-    src/orchestration/pipeline.py) - this function only validates lengths
-    match, it cannot detect a mismatched-window bug on its own.
-    """
     metric = config["primary_metric"]
     threshold = config["decision_threshold"]
     tolerance_band = config["tolerance_band"]
@@ -189,7 +104,7 @@ def evaluate_gate(
     if not (len(y_true) == len(champion_prob) == len(challenger_prob)):
         raise ValueError(
             "y_true, champion_prob, challenger_prob must be the same length "
-            "(matched batch) - mismatched lengths usually mean a stale "
+            "(matched batch): mismatched lengths usually mean a stale "
             "prediction table or the wrong window was passed in"
         )
 
@@ -200,30 +115,13 @@ def evaluate_gate(
     passed_tolerance = challenger_metric >= champion_metric - tolerance_band
     passed_dominance = challenger_metric > champion_metric
 
-    champion_pred = (champion_prob >= threshold).astype(int)
-    challenger_pred = (challenger_prob >= threshold).astype(int)
-    champion_correct = champion_pred == y_true
-    challenger_correct = challenger_pred == y_true
-
-    # McNemar is always computed, but purely as a diagnostic now (see the
-    # module docstring for why it no longer decides passed_significance):
-    # it's reported under details["mcnemar_*"] regardless of n_discordant,
-    # with mcnemar_reliable flagging whether this batch even had enough
-    # discordant pairs to trust it as a diagnostic in the first place.
+    champion_correct = (champion_prob >= threshold).astype(int) == y_true
+    challenger_correct = (challenger_prob >= threshold).astype(int) == y_true
     mcnemar_chi2, mcnemar_pvalue, n_discordant = _mcnemar(champion_correct, challenger_correct)
 
-    # Significance is tested directly on the primary metric's delta via a
-    # paired bootstrap CI, unconditionally, so the same statistical question
-    # is asked at every sample size instead of switching questions (ranking
-    # metric vs. threshold-discretized hard-label agreement) depending on
-    # how many discordant pairs a given batch happens to have.
-    significance_method = "bootstrap"
-    lower, upper = _bootstrap_delta_ci(
-        y_true, champion_prob, challenger_prob, metric, threshold,
-        n_resamples, seed, alpha,
+    lower, upper = bootstrap_delta_ci(
+        y_true, champion_prob, challenger_prob, metric, threshold, n_resamples, seed, alpha
     )
-    significance_stat = None
-    significance_pvalue = None
     passed_significance = lower > 0
 
     details: dict[str, Any] = {
@@ -262,9 +160,7 @@ def evaluate_gate(
         tolerance_band=tolerance_band,
         passed_tolerance=passed_tolerance,
         passed_dominance=passed_dominance,
-        significance_method=significance_method,
-        significance_stat=significance_stat,
-        significance_pvalue=significance_pvalue,
+        significance_method="bootstrap",
         passed_significance=passed_significance,
         reason=reason,
         details=details,

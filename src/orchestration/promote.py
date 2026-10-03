@@ -1,14 +1,8 @@
-"""MLflow alias-based promotion and rollback, with the 4.1 fix built in: the
-rollback reference stored at promotion time is the challenger's performance
-on the drifted window it was gated against (window_metrics), plus a drift
-fingerprint of that window, never the frozen holdout. The reference's own
-fingerprint is checked for staleness before any rollback comparison is
-trusted.
-"""
-
 from typing import Any
 
 import mlflow
+import mlflow.sklearn
+import pandas as pd
 from sqlalchemy.engine import Connection
 
 from src.db.repository import (
@@ -20,10 +14,43 @@ from src.db.repository import (
     write_audit_log,
 )
 from src.drift.detect import check_fingerprint_staleness, compute_fingerprint
-from src.gate.evaluate import bootstrap_metric_ci
+from src.gate.evaluate import bootstrap_delta_ci
 from src.model.features import TARGET
+from src.model.train import score
+from src.utils.config import MODEL_NAME, PRODUCTION_ALIAS
 
-MODEL_NAME = "credit-risk-classifier"
+
+def set_production_alias(version: str) -> None:
+    mlflow.MlflowClient().set_registered_model_alias(MODEL_NAME, PRODUCTION_ALIAS, str(version))
+
+
+def current_production_version() -> str | None:
+    try:
+        info = mlflow.MlflowClient().get_model_version_by_alias(MODEL_NAME, PRODUCTION_ALIAS)
+    except Exception:
+        return None
+    return str(info.version)
+
+
+def load_model_version(version: str) -> Any:
+    return mlflow.sklearn.load_model(f"models:/{MODEL_NAME}/{version}")
+
+
+def reconcile_production_alias(conn: Connection) -> bool:
+    latest = get_latest_champion(conn)
+    if latest is None:
+        return False
+    expected = str(latest["model_version"])
+    actual = current_production_version()
+    if actual == expected:
+        return False
+    set_production_alias(expected)
+    write_audit_log(
+        conn,
+        "alias_reconciled",
+        {"expected_version": expected, "found_version": actual},
+    )
+    return True
 
 
 def promote_challenger(
@@ -31,18 +58,11 @@ def promote_challenger(
     challenger_version: str,
     holdout_metrics: dict[str, float],
     window_metrics: dict[str, float],
-    window_df,
-    training_pool_df,
+    window_df: pd.DataFrame,
+    training_pool_df: pd.DataFrame,
+    fingerprint_kwargs: dict[str, Any] | None = None,
 ) -> int:
-    """Aliases challenger_version as @production. Stores window_metrics (not
-    holdout metrics) as the rollback reference, alongside a drift fingerprint
-    of the window computed against the canonical training reference.
-    Writes an audit_log entry regardless - promotion is itself an event.
-    """
-    client = mlflow.MlflowClient()
-    client.set_registered_model_alias(MODEL_NAME, "production", challenger_version)
-
-    fingerprint = compute_fingerprint(window_df, training_pool_df)
+    fingerprint = compute_fingerprint(window_df, training_pool_df, **(fingerprint_kwargs or {}))
 
     champion_history_id = insert_champion_history(
         conn,
@@ -53,192 +73,146 @@ def promote_challenger(
             "drift_fingerprint": fingerprint,
         },
     )
-
     write_audit_log(
         conn,
-        event_type="promotion",
-        payload={
-            "champion_history_id": champion_history_id,
+        "promotion",
+        {
             "model_version": challenger_version,
-            "holdout_metrics": holdout_metrics,
+            "champion_history_id": champion_history_id,
             "window_metrics": window_metrics,
         },
     )
+    set_production_alias(challenger_version)
     return champion_history_id
 
 
 def find_previous_champion(
-    history: list[dict[str, Any]], current_champion_history_id: int
+    champion_history: list[dict[str, Any]], current_champion_history_id: int
 ) -> dict[str, Any] | None:
-    """Pure selection logic, split out from check_rollback so it's directly
-    testable: the most recent entry strictly before the current one that was
-    never itself rolled back. Supports N-hop rollback (4.3) - this just has
-    to find the right hop, not walk the whole chain by hand.
-    """
     candidates = [
-        h
-        for h in history
-        if h["id"] < current_champion_history_id and h["rolled_back_at"] is None
+        row
+        for row in champion_history
+        if row["id"] < current_champion_history_id and row["rolled_back_at"] is None
     ]
-    if not candidates:
-        return None
-    return max(candidates, key=lambda h: h["id"])
+    return max(candidates, key=lambda r: r["id"]) if candidates else None
 
 
 def check_rollback(
     conn: Connection,
-    live_batch_df,
+    live_batch_df: pd.DataFrame,
     live_prob,
     live_metrics: dict[str, float],
-    training_pool_df,
-    metric_name: str,
-    decision_threshold: float,
-    drop_threshold: float,
-    staleness_drift_share_delta_threshold: float,
-    staleness_column_pvalue_delta_threshold: float,
-    bootstrap_resamples: int = 2000,
-    significance_alpha: float = 0.05,
+    training_pool_df: pd.DataFrame,
+    gate_config: dict[str, Any],
     seed: int = 42,
 ) -> dict[str, Any]:
-    """Two-step rollback check (4.1), plus a significance check (this pass):
-
-      1. Has the stored reference window's fingerprint diverged materially
-         from live traffic? If so, the reference is no longer apples-to-apples
-         comparable. Rather than trust a stale comparison, flag it and
-         suppress the rollback decision this cycle (conservative choice -
-         a genuinely bad model stays live a bit longer, but nothing gets
-         silently reverted against numbers we already know are unreliable).
-      2. If the reference is still fresh, compare live_metrics against the
-         stored window_metrics - a same-distribution comparison, never
-         live-vs-pristine-holdout.
-      3. If step 2's point estimate looks like a real drop, confirm it with
-         a bootstrap CI on the live batch before actually rolling back - a
-         raw point-estimate threshold on ~200 rows and a handful of
-         positives swings on sampling noise alone (a real run showed
-         rollback_triggered=True on drops that were pure noise, with
-         nothing to actually roll back to yet). Requires the CI's upper
-         (optimistic) bound to still fall below the drop threshold, not
-         just the single point estimate - the same rigor the promotion
-         gate already applies via its own bootstrap CI on the other side.
-
-    Note: check_rollback is deliberately not called at all on a tick that
-    just promoted a challenger (see src/orchestration/pipeline.py's run_tick)
-    - the newly-promoted model and the window it was gated against are the
-    same model scored on the same rows window_metrics was just computed
-    from, so a same-tick rollback comparison would be a no-op against
-    itself. That skip happens in the caller, not here, so this function can
-    stay a pure "given a live batch, is the current champion's reference
-    still trustworthy" check regardless of what just happened upstream.
-
-    rollback_triggered vs rollback_executed: rollback_triggered means step 3's
-    statistical test says the champion has genuinely degraded. It says nothing
-    about whether there's anywhere to revert to. rollback_executed is only
-    True once a valid prior champion was actually found and the production
-    alias was actually swapped. A run with only one promotion so far will
-    correctly show rollback_triggered=True, rollback_executed=False the first
-    time a real drop occurs - that's the check working, not failing. Callers
-    that want a count of actual reversions (not just flagged degradations)
-    must use rollback_executed, not rollback_triggered.
-    """
+    metric_name = gate_config["primary_metric"]
     current = get_latest_champion(conn)
     if current is None:
         return {
             "rollback_triggered": False,
             "rollback_executed": False,
-            "reason": "no champion on record",
+            "degradation_flagged": False,
+            "reference_stale": False,
+            "reason": "no champion recorded",
         }
 
-    live_fingerprint = compute_fingerprint(live_batch_df, training_pool_df)
+    live_fingerprint = compute_fingerprint(
+        live_batch_df,
+        training_pool_df,
+        ks_pvalue_threshold=gate_config["drift_ks_pvalue_threshold"],
+    )
     is_stale = check_fingerprint_staleness(
         current["drift_fingerprint"],
         live_fingerprint,
-        staleness_drift_share_delta_threshold,
-        staleness_column_pvalue_delta_threshold,
+        drift_share_delta_threshold=gate_config["staleness_drift_share_delta_threshold"],
+        drifted_column_disagreement_threshold=gate_config[
+            "staleness_drifted_column_disagreement_threshold"
+        ],
     )
+    mark_reference_stale(conn, current["id"], is_stale)
 
     if is_stale:
-        mark_reference_stale(conn, current["id"], stale=True)
-        write_audit_log(
-            conn,
-            event_type="rollback_check",
-            payload={
-                "champion_history_id": current["id"],
-                "rollback_triggered": False,
-                "reference_stale": True,
-                "reason": (
-                    "reference window fingerprint diverged from live traffic, "
-                    "rollback check suppressed until re-baselined against a "
-                    "fresh labeled window"
-                ),
-            },
-        )
-        return {"rollback_triggered": False, "rollback_executed": False, "reference_stale": True}
-
-    mark_reference_stale(conn, current["id"], stale=False)
+        result = {
+            "rollback_triggered": False,
+            "rollback_executed": False,
+            "degradation_flagged": False,
+            "reference_stale": True,
+            "reason": (
+                "drift fingerprint at promotion no longer matches the live regime, "
+                "so the stored reference metric is not comparable"
+            ),
+        }
+        write_audit_log(conn, "rollback_check", {**result, "champion_history_id": current["id"]})
+        return result
 
     stored_metric = current["window_metrics"].get(metric_name)
     live_metric = live_metrics.get(metric_name)
-    drop = (
-        stored_metric - live_metric
-        if stored_metric is not None and live_metric is not None
-        else None
-    )
-    point_estimate_flagged = drop is not None and drop >= drop_threshold
+    drop = None if stored_metric is None or live_metric is None else stored_metric - live_metric
+    degradation_flagged = drop is not None and drop >= gate_config["rollback_metric_drop_threshold"]
 
-    rollback_triggered = False
+    previous = None
     ci_lower = ci_upper = None
-    if point_estimate_flagged:
-        ci_lower, ci_upper = bootstrap_metric_ci(
-            live_batch_df[TARGET].to_numpy(),
-            live_prob,
-            metric_name,
-            decision_threshold,
-            bootstrap_resamples,
-            seed,
-            significance_alpha,
-        )
-        rollback_triggered = ci_upper < (stored_metric - drop_threshold)
-
-    write_audit_log(
-        conn,
-        event_type="rollback_check",
-        payload={
-            "champion_history_id": current["id"],
-            "stored_metric": stored_metric,
-            "live_metric": live_metric,
-            "drop": drop,
-            "point_estimate_flagged": point_estimate_flagged,
-            "bootstrap_ci_lower": ci_lower,
-            "bootstrap_ci_upper": ci_upper,
-            "rollback_triggered": rollback_triggered,
-            "reference_stale": False,
-        },
-    )
-
-    rollback_executed = False
-    if rollback_triggered:
-        history = get_champion_history(conn)
-        previous = find_previous_champion(history, current["id"])
+    rollback_triggered = False
+    if degradation_flagged:
+        previous = find_previous_champion(get_champion_history(conn), current["id"])
         if previous is not None:
-            rollback_executed = True
-            client = mlflow.MlflowClient()
-            client.set_registered_model_alias(
-                MODEL_NAME, "production", previous["model_version"]
+            previous_prob = score(load_model_version(previous["model_version"]), live_batch_df)
+            ci_lower, ci_upper = bootstrap_delta_ci(
+                live_batch_df[TARGET].to_numpy(),
+                live_prob,
+                previous_prob,
+                metric_name,
+                gate_config["decision_threshold"],
+                gate_config["bootstrap_resamples"],
+                seed,
+                gate_config["significance_alpha"],
             )
-            record_rollback(conn, current["id"], previous["model_version"])
-            write_audit_log(
-                conn,
-                event_type="rollback",
-                payload={
-                    "rolled_back_from": current["model_version"],
-                    "rolled_back_to": previous["model_version"],
-                    "drop": drop,
-                },
-            )
+            rollback_triggered = ci_lower > 0
+
+    if not degradation_flagged:
+        reason = "live metric within threshold of the reference metric"
+    elif previous is None:
+        reason = "degradation flagged but no earlier champion is available to roll back to"
+    elif rollback_triggered:
+        reason = "earlier champion significantly outperforms current champion on the live batch"
+    else:
+        reason = "degradation flagged but earlier champion is not significantly better on the live batch"
+
+    payload = {
+        "champion_history_id": current["id"],
+        "stored_metric": stored_metric,
+        "live_metric": live_metric,
+        "drop": drop,
+        "degradation_flagged": degradation_flagged,
+        "candidate_version": previous["model_version"] if previous else None,
+        "bootstrap_ci_lower": ci_lower,
+        "bootstrap_ci_upper": ci_upper,
+        "rollback_triggered": rollback_triggered,
+        "reference_stale": False,
+        "reason": reason,
+    }
+    write_audit_log(conn, "rollback_check", payload)
+
+    if rollback_triggered:
+        record_rollback(conn, current["id"], previous["model_version"])
+        write_audit_log(
+            conn,
+            "rollback",
+            {
+                "rolled_back_from": current["model_version"],
+                "rolled_back_to": previous["model_version"],
+                "champion_history_id": current["id"],
+                "drop": drop,
+            },
+        )
+        set_production_alias(previous["model_version"])
 
     return {
         "rollback_triggered": rollback_triggered,
-        "rollback_executed": rollback_executed,
+        "rollback_executed": rollback_triggered,
+        "degradation_flagged": degradation_flagged,
         "reference_stale": False,
+        "reason": reason,
         "drop": drop,
     }

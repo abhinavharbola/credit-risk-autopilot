@@ -1,12 +1,4 @@
-# Recession-scenario drift injection parameters. Deterministic (no random
-# seed needed here): persistent drift is a fixed shift/scale, temporary
-# concept drift is a fixed-ratio blend toward a computed centroid, so the
-# same config always produces the same output for a given batch. The
-# project's actual seeded randomness (holdout carve, batch shuffling) lives
-# in src/data/split.py, with its own independent seed=42 defaults.
-
 persistent_drift:
-  # active from this batch index onward, never turns off
   start_batch: 10
   columns:
     DebtRatio:
@@ -16,14 +8,13 @@ persistent_drift:
       shift: 0.10
       scale: 1.15
     MonthlyIncome:
-      shift: -0.20   # fractional shrink
+      shift: -0.20
       scale: 1.0
 
 temporary_concept_drift:
-  # fixed window, reverts after end_batch
   start_batch: 15
   end_batch: 20
-  blend_ratio: 0.5  # 0 = no blend, 1 = fully collapsed onto non-delinquent centroid
+  blend_ratio: 0.5
   columns:
     - RevolvingUtilizationOfUnsecuredLines
     - DebtRatio
