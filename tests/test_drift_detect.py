@@ -1,151 +1,170 @@
-"""Tests _reduce_to_fingerprint against a real evidently==0.7.21
-report.dict() output, captured from an actual live run (not guessed from
-docs). This exact payload is what exposed the original bug: matching on a
-"metric_id" key that doesn't exist in the real schema meant drift_share
-stayed None forever and the retrain trigger never fired across a full
-25-tick demo run. This test pins the fix so that regression can't silently
-come back.
-"""
+import numpy as np
+import pandas as pd
+import pytest
 
-import tests._stubs  # noqa: F401  (must run before src imports below)
+import src.drift.detect as detect_mod
+from src.drift.detect import (
+    DriftFingerprintError,
+    _reduce_to_fingerprint,
+    check_fingerprint_staleness,
+    check_retrain_trigger,
+    compute_fingerprint,
+)
 
-from src.drift.detect import _reduce_to_fingerprint
 
-# captured verbatim from a live evidently==0.7.21 run comparing a drifted
-# batch (DebtRatio shifted) against a clean reference
-REAL_EVIDENTLY_OUTPUT = {
-    "metrics": [
+def ks_output(share, pvalues, method="ks"):
+    metrics = [
         {
-            "id": "15e89f895b482f9b84ba7274ed18a106",
-            "metric_name": "DriftedColumnsCount(drift_share=0.5)",
-            "config": {
-                "type": "evidently:metric_v2:DriftedColumnsCount",
-                "drift_share": 0.5,
-            },
-            "value": {"count": 1.0, "share": 0.3333333333333333},
-        },
-        {
-            "id": "3101add92406b5469c65ad579a51ea39",
-            "metric_name": "ValueDrift(column=DebtRatio,method=K-S p_value,threshold=0.05)",
-            "config": {
-                "type": "evidently:metric_v2:ValueDrift",
-                "column": "DebtRatio",
-                "method": "K-S p_value",
-                "threshold": 0.05,
-            },
-            "value": 4.569224815484179e-66,
-        },
-        {
-            "id": "96a46647ac7709a5834a782551789cb7",
-            "metric_name": (
-                "ValueDrift(column=RevolvingUtilizationOfUnsecuredLines,"
-                "method=K-S p_value,threshold=0.05)"
-            ),
-            "config": {
-                "type": "evidently:metric_v2:ValueDrift",
-                "column": "RevolvingUtilizationOfUnsecuredLines",
-                "method": "K-S p_value",
-                "threshold": 0.05,
-            },
-            "value": 0.7933622419382523,
-        },
-        {
-            "id": "cc102b3d5cf019c902ad5b4cbb420054",
-            "metric_name": "ValueDrift(column=MonthlyIncome,method=K-S p_value,threshold=0.05)",
-            "config": {
-                "type": "evidently:metric_v2:ValueDrift",
-                "column": "MonthlyIncome",
-                "method": "K-S p_value",
-                "threshold": 0.05,
-            },
-            "value": 0.17793352788293415,
-        },
-    ],
-    "tests": [],
-}
+            "metric_name": "DriftedColumnsCount",
+            "config": {"type": "evidently:metric_v2:DriftedColumnsCount", "drift_share": 0.5},
+            "value": {"count": share * len(pvalues), "share": share},
+        }
+    ]
+    for column, value in pvalues.items():
+        metrics.append(
+            {
+                "metric_name": f"ValueDrift(column={column})",
+                "config": {
+                    "type": "evidently:metric_v2:ValueDrift",
+                    "column": column,
+                    "method": method,
+                    "threshold": 0.05,
+                },
+                "value": value,
+            }
+        )
+    return {"metrics": metrics, "tests": []}
 
 
-def test_reduce_to_fingerprint_extracts_drift_share_from_real_output():
-    fingerprint = _reduce_to_fingerprint(REAL_EVIDENTLY_OUTPUT)
-    assert fingerprint["drift_share"] == 0.3333333333333333
+def test_reduce_extracts_drift_share_scores_and_drifted_columns():
+    raw = ks_output(1 / 3, {"DebtRatio": 4.5e-66, "MonthlyIncome": 0.18, "age": 0.79})
+    fingerprint = _reduce_to_fingerprint(raw)
+    assert fingerprint["drift_share"] == pytest.approx(1 / 3)
+    assert fingerprint["column_drift_scores"]["MonthlyIncome"] == 0.18
+    assert fingerprint["drifted_columns"] == ["DebtRatio"]
 
 
-def test_reduce_to_fingerprint_extracts_per_column_pvalues_from_real_output():
-    fingerprint = _reduce_to_fingerprint(REAL_EVIDENTLY_OUTPUT)
-    scores = fingerprint["column_drift_scores"]
-    assert scores["DebtRatio"] < 1e-60
-    assert scores["RevolvingUtilizationOfUnsecuredLines"] == 0.7933622419382523
-    assert scores["MonthlyIncome"] == 0.17793352788293415
+def test_reduce_treats_distance_methods_as_drifted_above_threshold():
+    raw = ks_output(0.5, {"DebtRatio": 0.4, "age": 0.02}, method="Wasserstein distance (normed)")
+    fingerprint = _reduce_to_fingerprint(raw)
+    assert fingerprint["drifted_columns"] == ["DebtRatio"]
 
 
-def test_reduce_to_fingerprint_never_returns_none_drift_share_for_valid_output():
-    """This is the actual regression the original bug caused: drift_share
-    silently stayed None on every real report, so retrain never triggered
-    across an entire 25-tick run despite real, measurable drift.
-    """
-    fingerprint = _reduce_to_fingerprint(REAL_EVIDENTLY_OUTPUT)
-    assert fingerprint["drift_share"] is not None
-
-
-def test_retrain_would_trigger_at_the_configured_threshold():
-    """Uses config/gate_config.yaml's actual retrain_drift_share_threshold
-    (0.3, not the original 0.1 - raised after a real run showed 0.1 producing
-    false retrain triggers on undrifted batches from multiple-testing noise
-    alone, see the comment in gate_config.yaml for the statistical rationale).
-    The captured sample has drift_share=0.333 (1 of the 3 tested columns
-    flagged), which still clears 0.3.
-    """
-    fingerprint = _reduce_to_fingerprint(REAL_EVIDENTLY_OUTPUT)
-    threshold = 0.3  # config/gate_config.yaml: retrain_drift_share_threshold
-    triggered = fingerprint["drift_share"] is not None and fingerprint["drift_share"] >= threshold
-    assert triggered is True
-
-
-def test_single_column_noise_does_not_trigger_at_the_raised_threshold():
-    """The actual bug this threshold change fixes: a fingerprint where only
-    one feature out of ten spuriously flags (share=0.1, exactly the old
-    threshold) must NOT trigger a retrain - that's multiple-testing noise on
-    an undrifted batch, not real drift.
-    """
-    single_column_noise = {
-        "drift_share": 0.1,
-        "column_drift_scores": {"DebtRatio": 0.03},
+def test_reduce_handles_missing_metrics_key_gracefully():
+    assert _reduce_to_fingerprint({}) == {
+        "drift_share": None,
+        "column_drift_scores": {},
+        "drifted_columns": [],
     }
-    threshold = 0.3
-    triggered = (
-        single_column_noise["drift_share"] is not None
-        and single_column_noise["drift_share"] >= threshold
+
+
+def test_check_retrain_trigger_raises_instead_of_silently_not_triggering(monkeypatch):
+    frame = pd.DataFrame({"DebtRatio": [0.1, 0.2]})
+    monkeypatch.setattr(
+        detect_mod,
+        "compute_fingerprint",
+        lambda *a, **k: {"drift_share": None, "column_drift_scores": {}, "drifted_columns": []},
     )
-    assert triggered is False
+    with pytest.raises(DriftFingerprintError):
+        check_retrain_trigger(frame, frame, drift_share_threshold=0.3)
 
 
-def test_reduce_to_fingerprint_handles_missing_metrics_key_gracefully():
-    fingerprint = _reduce_to_fingerprint({})
-    assert fingerprint == {"drift_share": None, "column_drift_scores": {}}
+@pytest.mark.parametrize("share,expected", [(0.3, True), (0.29, False), (0.9, True), (0.0, False)])
+def test_check_retrain_trigger_compares_share_to_threshold(monkeypatch, share, expected):
+    frame = pd.DataFrame({"DebtRatio": [0.1, 0.2]})
+    monkeypatch.setattr(
+        detect_mod,
+        "compute_fingerprint",
+        lambda *a, **k: {"drift_share": share, "column_drift_scores": {}, "drifted_columns": []},
+    )
+    triggered, fingerprint = check_retrain_trigger(frame, frame, drift_share_threshold=0.3)
+    assert triggered is expected
+    assert fingerprint["drift_share"] == share
 
 
-def test_check_retrain_trigger_raises_instead_of_silently_not_triggering():
-    """Fix for the actual bug that shipped once: an unreadable Evidently
-    report used to leave drift_share=None, and check_retrain_trigger treated
-    that identically to 'no drift detected' - silently disabling retraining
-    for an entire run with no error anywhere. It must now raise instead.
-    """
-    import pandas as pd
-    import pytest
+def test_real_evidently_uses_ks_pvalues_even_for_a_large_reference():
+    rng = np.random.default_rng(0)
+    columns = ["DebtRatio", "MonthlyIncome", "age"]
 
-    from src.drift.detect import DriftFingerprintError, check_retrain_trigger
+    def frame(n, shift=0.0):
+        return pd.DataFrame(
+            {
+                "DebtRatio": rng.pareto(1.2, n) * 100 + shift * 100,
+                "MonthlyIncome": rng.lognormal(8.5, 0.6, n),
+                "age": rng.integers(21, 90, n).astype(float),
+            }
+        )
 
-    empty_df = pd.DataFrame({"DebtRatio": [0.1, 0.2]})
+    reference = frame(6000)
+    stable = compute_fingerprint(frame(200), reference, columns=columns)
+    drifted = compute_fingerprint(frame(200, shift=1.0), reference, columns=columns)
 
-    def fake_compute_fingerprint(current_df, reference_df, columns=None):
-        return {"drift_share": None, "column_drift_scores": {}}
+    assert all(0.0 <= v <= 1.0 for v in stable["column_drift_scores"].values())
+    assert "DebtRatio" not in stable["drifted_columns"] or stable["drift_share"] <= 1 / 3
+    assert "DebtRatio" in drifted["drifted_columns"]
+    assert drifted["drift_share"] >= 1 / 3
 
-    import src.drift.detect as detect_mod
 
-    orig = detect_mod.compute_fingerprint
-    detect_mod.compute_fingerprint = fake_compute_fingerprint
-    try:
-        with pytest.raises(DriftFingerprintError):
-            check_retrain_trigger(empty_df, empty_df, drift_share_threshold=0.3)
-    finally:
-        detect_mod.compute_fingerprint = orig
+def test_staleness_flags_large_drift_share_delta():
+    then = {"drift_share": 0.1, "column_drift_scores": {}, "drifted_columns": []}
+    now = {"drift_share": 0.5, "column_drift_scores": {}, "drifted_columns": []}
+    assert check_fingerprint_staleness(then, now, 0.3, 0.3) is True
+
+
+def test_staleness_false_when_regime_is_unchanged():
+    columns = {c: 0.5 for c in "abcdefghij"}
+    then = {"drift_share": 0.2, "column_drift_scores": columns, "drifted_columns": ["a", "b"]}
+    now = {"drift_share": 0.2, "column_drift_scores": columns, "drifted_columns": ["a", "b"]}
+    assert check_fingerprint_staleness(then, now, 0.3, 0.3) is False
+
+
+def test_staleness_flags_different_drifted_columns_even_if_share_is_equal():
+    columns = {c: 0.5 for c in "abcdefghij"}
+    then = {"drift_share": 0.3, "column_drift_scores": columns, "drifted_columns": ["a", "b", "c"]}
+    now = {"drift_share": 0.3, "column_drift_scores": columns, "drifted_columns": ["d", "e", "f"]}
+    assert check_fingerprint_staleness(then, now, 0.3, 0.3) is True
+
+
+def test_staleness_is_not_triggered_by_pvalue_noise_alone():
+    rng = np.random.default_rng(0)
+    columns = list("abcdefghij")
+    stale_count = 0
+    for _ in range(200):
+        then_p = {c: float(rng.uniform()) for c in columns}
+        now_p = {c: float(rng.uniform()) for c in columns}
+        then = {
+            "drift_share": sum(p < 0.05 for p in then_p.values()) / 10,
+            "column_drift_scores": then_p,
+            "drifted_columns": [c for c, p in then_p.items() if p < 0.05],
+        }
+        now = {
+            "drift_share": sum(p < 0.05 for p in now_p.values()) / 10,
+            "column_drift_scores": now_p,
+            "drifted_columns": [c for c, p in now_p.items() if p < 0.05],
+        }
+        stale_count += check_fingerprint_staleness(then, now, 0.3, 0.3)
+    assert stale_count / 200 < 0.05
+
+
+def test_staleness_ignores_column_check_for_legacy_fingerprints():
+    then = {"drift_share": 0.2, "column_drift_scores": {"a": 0.1}}
+    now = {"drift_share": 0.21, "column_drift_scores": {"a": 0.9}}
+    assert check_fingerprint_staleness(then, now, 0.3, 0.3) is False
+
+
+def test_real_evidently_handles_low_cardinality_and_constant_columns():
+    rng = np.random.default_rng(1)
+
+    def frame(n):
+        return pd.DataFrame(
+            {
+                "few_values": rng.integers(0, 3, n).astype(float),
+                "constant": np.zeros(n),
+                "continuous": rng.random(n),
+            }
+        )
+
+    fingerprint = compute_fingerprint(frame(200), frame(4000), columns=list(frame(1).columns))
+
+    assert set(fingerprint["column_drift_scores"]) == {"few_values", "constant", "continuous"}
+    assert fingerprint["drift_share"] is not None

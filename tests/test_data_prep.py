@@ -1,7 +1,3 @@
-"""Unit tests for holdout carve-out, leakage-safe imputation, and batching.
-No infra, no I/O — synthetic dataframes only.
-"""
-
 import numpy as np
 import pandas as pd
 
@@ -9,6 +5,7 @@ from src.data.split import (
     apply_imputation,
     build_pretrain_batches,
     carve_holdout,
+    carve_stream,
     fit_imputation_medians,
 )
 from src.model.features import TARGET
@@ -42,7 +39,6 @@ def test_carve_holdout_disjoint_and_covers_all_rows():
     train_pool, holdout = carve_holdout(df, holdout_frac=0.15, seed=1)
 
     assert len(train_pool) + len(holdout) == len(df)
-    # every original row lands in exactly one split, none dropped or duplicated
     assert set(train_pool["_row_id"]).isdisjoint(set(holdout["_row_id"]))
     assert len(holdout) > 0
     assert len(train_pool) > 0
@@ -54,7 +50,6 @@ def test_carve_holdout_stratifies_positive_class():
 
     train_rate = train_pool[TARGET].mean()
     holdout_rate = holdout[TARGET].mean()
-    # both splits should retain a similar positive rate to the source
     assert abs(train_rate - holdout_rate) < 0.03
 
 
@@ -68,13 +63,9 @@ def test_carve_holdout_is_deterministic_given_seed():
 
 
 def test_medians_fit_on_train_pool_only_not_holdout():
-    """Leakage guard: if a holdout-only value dominates the source data,
-    it must not affect the fitted medians.
-    """
     df = make_synthetic_df(n=200, seed=3)
     train_pool, holdout = carve_holdout(df, holdout_frac=0.2, seed=3)
 
-    # inject an extreme, distinctive income value only into the holdout split
     holdout = holdout.copy()
     holdout["MonthlyIncome"] = 999_999.0
 
@@ -92,7 +83,6 @@ def test_apply_imputation_fills_only_target_columns():
 
     assert imputed["MonthlyIncome"].isna().sum() == 0
     assert imputed["NumberOfDependents"].isna().sum() == 0
-    # untouched columns unchanged
     pd.testing.assert_series_equal(imputed["age"], df["age"])
 
 
@@ -108,3 +98,26 @@ def test_build_pretrain_batches_fixed_size_and_reproducible():
     assert all(len(b) == 50 for b in batches_a)
     for a, b in zip(batches_a, batches_b):
         pd.testing.assert_frame_equal(a, b)
+
+
+def test_stream_batches_never_overlap_the_base_training_pool():
+    df = make_synthetic_df(n=6000)
+    df["_row_id"] = range(len(df))
+    remainder, holdout = carve_holdout(df, holdout_frac=0.15, seed=1)
+    base_pool, stream_pool = carve_stream(remainder, stream_frac=0.5, seed=1)
+    batches = build_pretrain_batches(stream_pool, batch_size=100, seed=1)
+
+    batch_ids = set().union(*(set(b["_row_id"]) for b in batches))
+    assert batch_ids.isdisjoint(set(base_pool["_row_id"]))
+    assert batch_ids.isdisjoint(set(holdout["_row_id"]))
+    assert set(base_pool["_row_id"]).isdisjoint(set(holdout["_row_id"]))
+
+
+def test_carve_stream_covers_the_remainder_and_stratifies():
+    df = make_synthetic_df(n=8000)
+    df["_row_id"] = range(len(df))
+    base_pool, stream_pool = carve_stream(df, stream_frac=0.5, seed=3)
+
+    assert len(base_pool) + len(stream_pool) == len(df)
+    assert abs(len(stream_pool) - len(df) / 2) < 5
+    assert abs(base_pool[TARGET].mean() - stream_pool[TARGET].mean()) < 0.02

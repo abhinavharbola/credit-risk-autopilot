@@ -1,8 +1,3 @@
-"""Unit tests for drift injection: persistent drift activation, temporary
-concept drift window, and deterministic reproducibility (neither transform
-uses randomness - both are fixed shift/scale/blend math).
-"""
-
 import numpy as np
 import pandas as pd
 
@@ -83,12 +78,10 @@ def test_temporary_concept_drift_active_inside_window_blends_toward_centroid():
     delinquent_before = batch.loc[batch[TARGET] == 1, "DebtRatio"]
     delinquent_after = out.loc[out[TARGET] == 1, "DebtRatio"]
 
-    # blended values must move strictly closer to the centroid than the originals
     dist_before = (delinquent_before - non_delinquent_centroid).abs()
     dist_after = (delinquent_after - non_delinquent_centroid).abs()
     assert (dist_after <= dist_before).all()
 
-    # non-delinquent rows are untouched
     pd.testing.assert_series_equal(
         out.loc[out[TARGET] == 0, "DebtRatio"], batch.loc[batch[TARGET] == 0, "DebtRatio"]
     )
@@ -111,11 +104,19 @@ def test_inject_drift_is_deterministic_given_same_batch_index():
 
 
 def test_inject_drift_combines_persistent_and_temporary_in_overlap_window():
-    """Batch 17 is inside both the persistent-drift range (>=10) and the
-    temporary window (15-20): both effects should be present.
-    """
     batch = make_batch(n=150, seed=2)
     out = inject_drift(batch, batch_index=17, params=PARAMS)
 
     persistent_only = apply_persistent_drift(batch, 17, PARAMS)
-    assert not out.equals(persistent_only)  # temporary drift added more change
+    assert not out.equals(persistent_only)
+
+
+def test_concept_drift_leaves_single_class_batches_unchanged_instead_of_nan():
+    batch = make_batch(50, seed=1)
+    batch[TARGET] = 0
+    out = apply_temporary_concept_drift(batch, 16, PARAMS)
+    pd.testing.assert_frame_equal(out, batch)
+
+    batch[TARGET] = 1
+    out = apply_temporary_concept_drift(batch, 16, PARAMS)
+    assert not out.isna().any().any()
