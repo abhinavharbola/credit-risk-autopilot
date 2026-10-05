@@ -46,9 +46,6 @@ def train_challenger(train_df: pd.DataFrame, run_name: str) -> tuple[str, str, P
         run_id = run.info.run_id
         version = str(model_info.registered_model_version)
 
-        client = mlflow.MlflowClient()
-        client.set_registered_model_alias(MODEL_NAME, "challenger", version)
-
     return run_id, version, model
 
 
